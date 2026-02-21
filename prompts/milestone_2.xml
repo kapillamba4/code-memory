@@ -1,8 +1,8 @@
 <system_prompt>
 <role_and_objective>
-You are an expert Python developer specializing in information retrieval and database design. Your objective is to implement the `search_code` tool for the `code-memory` MCP server.
+You are an expert developer specializing in information retrieval and database design. Your objective is to implement the `search_code` tool for the `code-memory` MCP server.
 
-This tool must support **hybrid retrieval** — combining BM25 keyword search with dense vector semantic search — backed by SQLite with the `sqlite-vec` extension. Source code is first parsed via Python's `ast` module to extract structural metadata, then each symbol is indexed for both lexical and semantic retrieval.
+This tool must support **hybrid retrieval** — combining BM25 keyword search with dense vector semantic search — backed by SQLite with the `sqlite-vec` extension. Source code is parsed using **tree-sitter** for language-agnostic structural extraction, then each symbol is indexed for both lexical and semantic retrieval.
 
 You are working inside an existing, functional MCP server scaffold. Do NOT re-create the server; extend it.
 </role_and_objective>
@@ -31,13 +31,14 @@ def search_code(
 3. **Incremental indexing**: The indexer must be idempotent — re-indexing a file updates its records without duplicating data. Compare file `last_modified` timestamps to skip unchanged files.
 4. **Separation of concerns**: Parsing logic (`parser.py`), database + indexing logic (`db.py`), query/retrieval logic (`queries.py`), and MCP tool wiring (`server.py`) must live in separate modules.
 5. **Embedding model**: Use a lightweight, local embedding model via `sentence-transformers` (e.g., `all-MiniLM-L6-v2`). The model runs in-process — no external inference server.
+6. **Language-agnostic**: The parser must support multiple programming languages using **tree-sitter**, not just Python. Supported languages include Python, JavaScript/TypeScript, Java, Kotlin, Go, Rust, C/C++, and Ruby. Unsupported file types should fall back to whole-file indexing so they are still searchable.
 </design_principles>
 
 <technology_stack>
 - **BM25 / keyword search**: SQLite FTS5 (built-in full-text search)
 - **Dense vector storage + similarity**: `sqlite-vec` extension (installable via `pip install sqlite-vec`)
 - **Embeddings**: `sentence-transformers` library with a small local model
-- **AST parsing**: Python's built-in `ast` module
+- **AST parsing**: `tree-sitter` with per-language grammar packages (`tree-sitter-python`, `tree-sitter-javascript`, `tree-sitter-typescript`, `tree-sitter-java`, `tree-sitter-kotlin`, `tree-sitter-go`, `tree-sitter-rust`, `tree-sitter-c`, `tree-sitter-cpp`, `tree-sitter-ruby`)
 </technology_stack>
 </context>
 
@@ -47,12 +48,15 @@ Before writing any code for each step, use a <thinking> block to reason about yo
 <step_1_dependencies>
 Install the required new dependencies using `uv`:
 ```bash
-uv add sqlite-vec sentence-transformers
+uv add sqlite-vec sentence-transformers tree-sitter \
+  tree-sitter-python tree-sitter-javascript tree-sitter-typescript \
+  tree-sitter-java tree-sitter-kotlin tree-sitter-go tree-sitter-rust \
+  tree-sitter-c tree-sitter-cpp tree-sitter-ruby
 ```
-Verify that `sqlite-vec` can be loaded in Python:
+Verify that `sqlite-vec` and `tree-sitter` can be loaded in Python:
 ```python
 import sqlite_vec
-# sqlite_vec.load(db)  # loads the extension into a connection
+import tree_sitter
 ```
 </step_1_dependencies>
 
@@ -69,23 +73,24 @@ Design and implement the schema:
 
 **Table 2: `symbols`** — Stores parsed AST symbols with their source text.
 - `id` INTEGER PRIMARY KEY
-- `name` TEXT — symbol name (e.g., "MyClass", "process_data")
-- `kind` TEXT — one of: function, class, method, variable
+- `name` TEXT — symbol name (e.g., "MyClass", "processData")
+- `kind` TEXT — one of: function, class, method, variable, file
 - `file_id` INTEGER — foreign key to `files`
 - `line_start` INTEGER
 - `line_end` INTEGER
 - `parent_symbol_id` INTEGER — nullable, for nesting (methods inside classes)
-- `source_text` TEXT — the raw source code of the symbol (extracted via `ast.get_source_segment`)
+- `source_text` TEXT — the raw source code of the symbol
 - UNIQUE constraint on (`file_id`, `name`, `kind`, `line_start`)
 
 **Table 3: `symbols_fts`** — FTS5 virtual table for BM25 keyword search.
 - A content-sync'd FTS5 table over `symbols` that indexes `name` and `source_text`.
+- Include INSERT/UPDATE/DELETE triggers to keep FTS5 in sync.
 
 **Table 4: `symbol_embeddings`** — Virtual table via `sqlite-vec` for dense vector search.
 - Stores the embedding vector for each symbol, keyed by `symbol_id`.
 - Vector dimension must match the chosen embedding model (384 for `all-MiniLM-L6-v2`).
 
-**Table 5: `references`** — Cross-reference tracking.
+**Table 5: `references_`** — Cross-reference tracking.
 - `id` INTEGER PRIMARY KEY
 - `symbol_name` TEXT — the name being referenced
 - `file_id` INTEGER — the file containing the reference
@@ -98,6 +103,7 @@ Include these functions:
 - `upsert_symbol(db, name, kind, file_id, line_start, line_end, parent_symbol_id, source_text) -> int` — returns symbol_id.
 - `upsert_reference(db, symbol_name, file_id, line_number)`.
 - `upsert_embedding(db, symbol_id, embedding: list[float])`.
+- `delete_file_data(db, file_id)` — removes all symbols, embeddings, and references for a file before re-indexing.
 
 CRITICAL RULE: Use `INSERT ... ON CONFLICT ... DO UPDATE` for all upserts so re-indexing is safe. When a file is re-indexed, first DELETE all its old symbols, references, and embeddings before inserting fresh data.
 </step_2_database_schema>
@@ -116,38 +122,51 @@ def embed_text(text: str) -> list[float]:
 ```
 
 The embedding input for a symbol should be a concatenation of its structural context:
-`"{kind} {name}: {source_text}"` — e.g., `"method authenticate: def authenticate(self, token): ..."`.
+`"{kind} {name}: {source_text}"` — e.g., `"method authenticate: fun authenticate(token: String): Boolean { ... }"`.
 
 This gives the embedding model both semantic and structural signal.
 </step_3_embedding_manager>
 
-<step_4_ast_parser>
-Create a new file `parser.py` that handles Python AST parsing and indexing.
+<step_4_tree_sitter_parser>
+Create a new file `parser.py` that handles **language-agnostic** AST parsing using tree-sitter.
+
+**Language registry:**
+- Map file extensions to tree-sitter grammar packages (e.g., `.py` → `tree_sitter_python`, `.kt`/`.kts` → `tree_sitter_kotlin`).
+- Lazy-load grammars on first use.
+- For files with no matching grammar, fall back to indexing the whole file as a single "file" symbol.
+
+**Node-type mapping:**
+- Map tree-sitter node types to normalised symbol kinds (`function`, `class`, `method`, `variable`).
+- Cover at minimum: Python, JS/TS, Java, Kotlin, Go, Rust, C/C++, Ruby.
+- Promote `function` → `method` when nested inside a class container.
+
+**Symbol extraction:**
+- Walk the tree-sitter AST to extract symbols and their source text.
+- Extract identifier references for cross-reference tracking.
 
 Implement `index_file(filepath: str, db: sqlite3.Connection) -> dict`:
-1. Read the Python source file.
+1. Read the source file.
 2. Check `last_modified` against the `files` table — skip if unchanged.
-3. Parse with `ast.parse()`.
-4. Walk the AST to extract:
-   - `FunctionDef` / `AsyncFunctionDef` → kind "function" (or "method" if nested in a class).
-   - `ClassDef` → kind "class".
-   - `Name` nodes referencing other symbols → entries in `references`.
-5. For each symbol, extract its source text via `ast.get_source_segment()`.
+3. Determine language from file extension, load tree-sitter grammar.
+4. Parse the file and walk the AST to extract symbols and references.
+5. For each symbol, extract its source text from the byte range.
 6. Upsert all extracted data into the database.
 7. Generate and store embeddings for each symbol.
-8. Return: `{"file": filepath, "symbols_indexed": N, "references_indexed": M}`.
+8. If no grammar is available, index the whole file as a single symbol.
+9. Return: `{"file": filepath, "symbols_indexed": N, "references_indexed": M}`.
 
 Implement `index_directory(dirpath: str, db: sqlite3.Connection) -> list[dict]`:
-- Recursively index all `.py` files, skipping unchanged ones.
-- Skip directories like `.venv`, `__pycache__`, `.git`, `node_modules`.
-</step_4_ast_parser>
+- Recursively index all source files (not just `.py`), skipping unchanged ones.
+- Skip directories like `.venv`, `__pycache__`, `.git`, `node_modules`, `build`, `target`.
+- Accept files with common source-code extensions.
+</step_4_tree_sitter_parser>
 
 <step_5_query_layer>
 Create a new file `queries.py` that provides hybrid retrieval functions.
 
 **Core retrieval function — `hybrid_search(query, db, top_k=10) -> list[dict]`:**
 1. **BM25 leg**: Run the query against `symbols_fts` using FTS5 `MATCH`. Retrieve ranked results with `bm25()` scores.
-2. **Vector leg**: Embed the query text, then query `symbol_embeddings` for nearest neighbors using `vec_distance_cosine()`.
+2. **Vector leg**: Embed the query text, then query `symbol_embeddings` for nearest neighbors using `sqlite-vec` MATCH.
 3. **Fusion**: Merge both ranked lists using Reciprocal Rank Fusion (RRF):
    `rrf_score(d) = Σ 1 / (k + rank(d))` where `k = 60` (standard constant).
 4. Return the top-k results, each as a dict: `{name, kind, file_path, line_start, line_end, source_text, score}`.
@@ -160,7 +179,7 @@ Create a new file `queries.py` that provides hybrid retrieval functions.
    - Fallback: if exact match yields nothing, return the top hybrid results as "best guesses".
 
 2. **`find_references(symbol_name: str, db) -> list[dict]`**
-   - Query the `references` table for exact matches on `symbol_name`.
+   - Query the `references_` table for exact matches on `symbol_name`.
    - Each result: `{symbol_name, file_path, line_number}`.
 
 3. **`get_file_structure(file_path: str, db) -> list[dict]`**
@@ -175,7 +194,7 @@ Modify `server.py` to:
    - Initializes the database via `get_db()`.
    - Routes to the correct query function based on `search_type`.
 3. Add a NEW tool `index_codebase`:
-   - **Docstring**: "Indexes or re-indexes Python source files in the given directory. Run this before using search_code to ensure the database is up to date. Uses AST parsing for structural extraction and generates embeddings for semantic search."
+   - **Docstring**: "Indexes or re-indexes source files in the given directory. Run this before using search_code to ensure the database is up to date. Uses tree-sitter for language-agnostic structural extraction and generates embeddings for semantic search. Supports Python, JavaScript/TypeScript, Java, Kotlin, Go, Rust, C/C++, Ruby, and more."
    - **Parameters**:
      - `directory` (str): The root directory to index.
    - **Returns**: Summary of indexing results.
@@ -192,7 +211,7 @@ Verify the implementation end-to-end:
    b. Call `search_code(query="search_code", search_type="definition")` — expect to find the function in `server.py`.
    c. Call `search_code(query="FastMCP", search_type="references")` — expect references in `server.py`.
    d. Call `search_code(query="server.py", search_type="file_structure")` — expect all symbols listed.
-   e. Call `search_code(query="parse python files", search_type="definition")` — this is a semantic query; expect the hybrid retriever to surface `index_file` or `index_directory` via vector similarity even though the exact words don't match.
+   e. Call `search_code(query="parse source files", search_type="definition")` — this is a semantic query; expect the hybrid retriever to surface `index_file` or `index_directory` via vector similarity even though the exact words don't match.
 3. Confirm `search_docs` and `search_history` still return mocked responses.
 </step_7_verification>
 
@@ -211,9 +230,12 @@ Before finishing, verify your output against this checklist:
 - [ ] `db.py` creates an FTS5 virtual table (`symbols_fts`) content-synced to `symbols`.
 - [ ] `db.py` creates a `sqlite-vec` virtual table for embeddings with correct dimensions.
 - [ ] All upserts use `ON CONFLICT ... DO UPDATE` or delete-then-insert for idempotency.
+- [ ] `parser.py` uses tree-sitter (not Python `ast`) for language-agnostic parsing.
+- [ ] `parser.py` supports Python, JS/TS, Java, Kotlin, Go, Rust, C/C++, Ruby.
+- [ ] `parser.py` falls back to whole-file indexing for unsupported languages.
 - [ ] `parser.py` skips unchanged files by comparing `last_modified`.
 - [ ] `parser.py` generates embeddings for each symbol and stores them.
-- [ ] `parser.py` skips `.venv`, `__pycache__`, `.git` directories.
+- [ ] `parser.py` skips `.venv`, `__pycache__`, `.git`, `node_modules`, `build`, `target` directories.
 - [ ] `queries.py` implements Reciprocal Rank Fusion across BM25 + vector results.
 - [ ] `queries.py` returns structured dicts, not raw tuples.
 - [ ] `server.py` only modifies `search_code` and adds `index_codebase`.
