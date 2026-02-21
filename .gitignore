@@ -1,0 +1,37 @@
+# ── Python ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── Virtual environments ──────────────────────────────────────────────
+.venv/
+venv/
+ENV/
+
+# ── SQLite databases ─────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ── IDE ───────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Testing / Coverage ───────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── uv lock (keep in repo) ───────────────────────────────────────────
+# uv.lock is committed intentionally
