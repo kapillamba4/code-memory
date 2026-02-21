@@ -108,17 +108,57 @@ def search_docs(query: str) -> dict:
 
 # ── Tool 4: search_history ───────────────────────────────────────────
 @mcp.tool()
-def search_history(query: str, target_file: str | None = None) -> dict:
-    """Use this tool to debug regressions, understand developer intent,
-    or find out WHY a specific change was made by searching Git history
-    and commit messages."""
+def search_history(
+    query: str,
+    search_type: Literal["commits", "file_history", "blame", "commit_detail"] = "commits",
+    target_file: str | None = None,
+    line_start: int | None = None,
+    line_end: int | None = None,
+) -> dict:
+    """Search local Git history to debug regressions, understand developer
+    intent, or find out WHY a specific change was made.
 
-    return {
-        "status": "mocked",
-        "tool": "search_history",
-        "query": query,
-        "target_file": target_file,
-    }
+    **search_type options:**
+
+    - ``commits`` — Search commit messages for *query* (case-insensitive).
+      Optionally filter to commits that touched *target_file*.
+    - ``file_history`` — Show the commit log for *target_file* (follows
+      renames).  *target_file* is required; *query* is ignored.
+    - ``blame`` — Run ``git blame`` on *target_file*, optionally limited to
+      *line_start*–*line_end*.  *target_file* is required.
+    - ``commit_detail`` — Get full metadata and diff for one commit.
+      Pass the commit hash as *query*.  Optionally set *target_file* to
+      restrict the diff to that file.
+    """
+    import git_search as gs
+    from git.exc import InvalidGitRepositoryError, NoSuchPathError
+
+    try:
+        repo = gs.get_repo(".")
+    except (InvalidGitRepositoryError, NoSuchPathError) as exc:
+        return {"error": f"Git repository not found: {exc}"}
+
+    if search_type == "commits":
+        results = gs.search_commits(repo, query, target_file)
+        return {"search_type": "commits", "query": query, "results": results}
+
+    elif search_type == "file_history":
+        if not target_file:
+            return {"error": "target_file is required for file_history search"}
+        results = gs.get_file_history(repo, target_file)
+        return {"search_type": "file_history", "target_file": target_file, "results": results}
+
+    elif search_type == "blame":
+        if not target_file:
+            return {"error": "target_file is required for blame search"}
+        results = gs.get_blame(repo, target_file, line_start, line_end)
+        return {"search_type": "blame", "target_file": target_file, "results": results}
+
+    elif search_type == "commit_detail":
+        result = gs.get_commit_detail(repo, query, target_file)
+        return {"search_type": "commit_detail", "result": result}
+
+    return {"error": f"Unknown search_type: {search_type}"}
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────
