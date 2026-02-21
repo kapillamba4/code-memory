@@ -10,8 +10,8 @@ Instead of a single monolithic search, `code-memory` routes queries through **th
 
 | Question Type | Tool | Data Source |
 |---|---|---|
-| **"Where / What?"** — find definitions, references, structure | `search_code` | BM25 + Dense Vector (SQLite vec) |
-| **"How?"** — understand architecture, explain workflows | `search_docs` | Semantic / Fuzzy |
+| **"Where / What / How?"** — find definitions, references, structure, semantic search | `search_code` | BM25 + Dense Vector (SQLite vec) |
+| **"Architecture / Patterns"** — understand architecture, explain workflows | `search_docs` | Semantic / Fuzzy |
 | **"Who / Why?"** — debug regressions, understand intent | `search_history` | Git + BM25 + Dense Vector (SQLite vec) |
 | **"Setup / Prepare"** — index parsing & embedding generation | `index_codebase` | AST Parser + `sentence-transformers` |
 
@@ -110,7 +110,7 @@ index_codebase(directory=".")
 
 ### `search_code`
 
-Find exact structural code definitions, locate where functions/classes are defined, or map out dependency references (call graphs).
+Perform semantic search and find structural code definitions, locate where functions/classes are defined, or map out dependency references (call graphs). Uses hybrid retrieval (BM25 + vector embeddings) to find exact matches and semantic similarities.
 
 ```
 search_code(query="UserService", search_type="definition")
