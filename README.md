@@ -1,4 +1,4 @@
-# 🧠 code-memory
+# code-memory
 
 A deterministic, high-precision **code intelligence layer** exposed as a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server.
 
@@ -13,6 +13,7 @@ Instead of a single monolithic search, `code-memory` routes queries through **th
 | **"Where / What?"** — find definitions, references, structure | `search_code` | BM25 + Dense Vector (SQLite vec) |
 | **"How?"** — understand architecture, explain workflows | `search_docs` | Semantic / Fuzzy |
 | **"Who / Why?"** — debug regressions, understand intent | `search_history` | Git + BM25 + Dense Vector (SQLite vec) |
+| **"Setup / Prepare"** — index parsing & embedding generation | `index_codebase` | AST Parser + `sentence-transformers` |
 
 This forces the LLM to pick the *right retrieval strategy* before any data is fetched.
 
@@ -60,8 +61,8 @@ Add to your MCP settings (e.g. `~/.gemini/settings.json`):
 {
   "mcpServers": {
     "code-memory": {
-      "command": "uv",
-      "args": ["run", "--directory", "/absolute/path/to/code-memory", "mcp", "run", "server.py"]
+      "command": "uvx",
+      "args": ["code-memory"]
     }
   }
 }
@@ -75,8 +76,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 {
   "mcpServers": {
     "code-memory": {
-      "command": "uv",
-      "args": ["run", "--directory", "/absolute/path/to/code-memory", "mcp", "run", "server.py"]
+      "command": "uvx",
+      "args": ["code-memory"]
     }
   }
 }
@@ -90,14 +91,22 @@ Add to `.vscode/mcp.json` in your workspace:
 {
   "servers": {
     "code-memory": {
-      "command": "uv",
-      "args": ["run", "--directory", "/absolute/path/to/code-memory", "mcp", "run", "server.py"]
+      "command": "uvx",
+      "args": ["code-memory"]
     }
   }
 }
 ```
 
 ## Tools
+
+### `index_codebase`
+
+Indexes or re-indexes Python source files in the given directory. Run this before using `search_code` to ensure the database is up to date. Uses Python's `ast` module for structural extraction and generates dense vector embeddings using `sentence-transformers` (runs locally, in-process) for semantic search. All data is stored locally using `sqlite-vec`.
+
+```
+index_codebase(directory=".")
+```
 
 ### `search_code`
 
@@ -141,7 +150,7 @@ code-memory/
 ## Roadmap
 
 - [x] **Milestone 1** — Project scaffolding & MCP protocol wiring
-- [ ] **Milestone 2** — Implement `search_code` with AST parsing + SQLite
+- [ ] **Milestone 2** — Implement `search_code` with AST parsing + SQLite + `sqlite-vec`
 - [ ] **Milestone 3** — Implement `search_history` with Git integration
 - [ ] **Milestone 4** — Implement `search_docs` with semantic search
 - [ ] **Milestone 5** — Production hardening & packaging
