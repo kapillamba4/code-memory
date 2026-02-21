@@ -150,7 +150,7 @@ code-memory/
 ## Roadmap
 
 - [x] **Milestone 1** — Project scaffolding & MCP protocol wiring
-- [ ] **Milestone 2** — Implement `search_code` with AST parsing + SQLite + `sqlite-vec`
+- [x] **Milestone 2** — Implement `search_code` with AST parsing + SQLite + `sqlite-vec`
 - [ ] **Milestone 3** — Implement `search_history` with Git integration
 - [ ] **Milestone 4** — Implement `search_docs` with semantic search
 - [ ] **Milestone 5** — Production hardening & packaging
