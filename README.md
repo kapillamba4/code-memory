@@ -113,8 +113,8 @@ index_codebase(directory=".")
 Perform semantic search and find structural code definitions, locate where functions/classes are defined, or map out dependency references (call graphs). Uses hybrid retrieval (BM25 + vector embeddings) to find exact matches and semantic similarities.
 
 ```
-search_code(query="UserService", search_type="definition")
-search_code(query="authenticate", search_type="references")
+search_code(query="parse python files", search_type="definition")
+search_code(query="how do we establish the database connection", search_type="references")
 search_code(query="src/auth/", search_type="file_structure")
 ```
 
