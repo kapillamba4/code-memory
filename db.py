@@ -29,26 +29,42 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _model = None
-EMBEDDING_DIM = 1024  # jina-code-embeddings-0.5b (Matryoshka truncated)
+_embedding_dim = None
+
+# Model identifier - change this if you switch to a different embedding model
+EMBEDDING_MODEL_NAME = "jinaai/jina-code-embeddings-0.5b"
 
 
 def get_embedding_model():
     """Lazy-load and cache the sentence-transformers model."""
-    global _model
+    global _model, _embedding_dim
     if _model is None:
         from sentence_transformers import SentenceTransformer
 
         _model = SentenceTransformer(
-            "jinaai/jina-code-embeddings-0.5b", trust_remote_code=True
+            EMBEDDING_MODEL_NAME, trust_remote_code=True
         )
+        # Cache the embedding dimension from the model
+        _embedding_dim = _model.get_sentence_embedding_dimension()
+        logger.info(f"Loaded embedding model with dimension: {_embedding_dim}")
     return _model
+
+
+def get_embedding_dim() -> int:
+    """Get the embedding dimension from the model.
+
+    Loads the model if not already loaded.
+    Returns the native embedding dimension of the model.
+    """
+    if _embedding_dim is None:
+        get_embedding_model()
+    return _embedding_dim
 
 
 def embed_text(text: str, task_type: str = "nl2code") -> list[float]:
     """Generate a dense vector embedding for *text*.
 
     Uses jina-code-embeddings with task prefix for better code retrieval.
-    Matryoshka embedding truncated to 1024 dims for efficiency.
 
     Args:
         text: The text to embed.
@@ -57,7 +73,7 @@ def embed_text(text: str, task_type: str = "nl2code") -> list[float]:
     model = get_embedding_model()
     prefixed_text = f"{task_type}: {text}"
     vec = model.encode(prefixed_text, normalize_embeddings=True, show_progress_bar=False)
-    return vec.tolist()[:EMBEDDING_DIM]
+    return vec.tolist()
 
 
 def embed_texts_batch(
@@ -93,7 +109,7 @@ def embed_texts_batch(
         convert_to_numpy=True,
     )
 
-    return [v.tolist()[:EMBEDDING_DIM] for v in vectors]
+    return [v.tolist() for v in vectors]
 
 
 def warmup_embedding_model() -> None:
@@ -141,6 +157,12 @@ def transaction(db: sqlite3.Connection):
 # ---------------------------------------------------------------------------
 
 _SCHEMA_SQL = """
+-- 0. Metadata table for tracking index version and model info
+CREATE TABLE IF NOT EXISTS index_metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 -- 1. Tracked source files
 CREATE TABLE IF NOT EXISTS files (
     id            INTEGER PRIMARY KEY,
@@ -256,6 +278,9 @@ def get_db(project_dir: str) -> sqlite3.Connection:
     The database is stored as {project_dir}/code_memory.db to ensure each
     project has its own isolated index.
 
+    If the embedding model has changed since the last index, all indexed data
+    is automatically invalidated and the index will need to be rebuilt.
+
     Args:
         project_dir: The project directory where code_memory.db will be stored.
 
@@ -274,13 +299,83 @@ def get_db(project_dir: str) -> sqlite3.Connection:
 
     db.executescript(_SCHEMA_SQL)
 
-    # sqlite-vec virtual table for code embeddings (must be created outside executescript)
+    # Get embedding dimension from the model (loads model if needed)
+    embedding_dim = get_embedding_dim()
+
+    # Check if the embedding model has changed
+    stored_model = db.execute(
+        "SELECT value FROM index_metadata WHERE key = 'embedding_model'"
+    ).fetchone()
+    stored_dim = db.execute(
+        "SELECT value FROM index_metadata WHERE key = 'embedding_dim'"
+    ).fetchone()
+
+    model_changed = (
+        stored_model is None
+        or stored_model[0] != EMBEDDING_MODEL_NAME
+        or stored_dim is None
+        or int(stored_dim[0]) != embedding_dim
+    )
+
+    if model_changed:
+        if stored_model is not None:
+            # Model changed - invalidate existing index
+            logger.info(
+                f"Embedding model changed from '{stored_model[0] if stored_model else 'none'}' "
+                f"to '{EMBEDDING_MODEL_NAME}'. Invalidating index..."
+            )
+            _invalidate_index(db, embedding_dim)
+        else:
+            # New database - just create the embedding tables
+            _create_embedding_tables(db, embedding_dim)
+
+        # Store the current model info
+        db.execute(
+            "INSERT OR REPLACE INTO index_metadata (key, value) VALUES ('embedding_model', ?)",
+            (EMBEDDING_MODEL_NAME,)
+        )
+        db.execute(
+            "INSERT OR REPLACE INTO index_metadata (key, value) VALUES ('embedding_dim', ?)",
+            (str(embedding_dim),)
+        )
+        db.commit()
+
+    return db
+
+
+def _invalidate_index(db: sqlite3.Connection, embedding_dim: int) -> None:
+    """Invalidate the index by clearing all data and recreating embedding tables.
+
+    This is called when the embedding model changes.
+    """
+    # Drop existing embedding virtual tables
+    db.execute("DROP TABLE IF EXISTS symbol_embeddings")
+    db.execute("DROP TABLE IF EXISTS doc_embeddings")
+
+    # Clear all indexed data (cascades will handle related data via foreign keys,
+    # but we need to be explicit since FK enforcement may vary)
+    db.execute("DELETE FROM symbol_embeddings")
+    db.execute("DELETE FROM doc_embeddings")
+    db.execute("DELETE FROM symbols")
+    db.execute("DELETE FROM files")
+    db.execute("DELETE FROM references_")
+    db.execute("DELETE FROM doc_chunks")
+    db.execute("DELETE FROM doc_files")
+
+    # Recreate embedding tables with new dimension
+    _create_embedding_tables(db, embedding_dim)
+    logger.info("Index invalidated and embedding tables recreated")
+
+
+def _create_embedding_tables(db: sqlite3.Connection, embedding_dim: int) -> None:
+    """Create the embedding virtual tables with the specified dimension."""
+    # sqlite-vec virtual table for code embeddings
     db.execute(
         f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS symbol_embeddings
         USING vec0(
             symbol_id INTEGER PRIMARY KEY,
-            embedding float[{EMBEDDING_DIM}]
+            embedding float[{embedding_dim}]
         )
         """
     )
@@ -291,12 +386,10 @@ def get_db(project_dir: str) -> sqlite3.Connection:
         CREATE VIRTUAL TABLE IF NOT EXISTS doc_embeddings
         USING vec0(
             chunk_id INTEGER PRIMARY KEY,
-            embedding float[{EMBEDDING_DIM}]
+            embedding float[{embedding_dim}]
         )
         """
     )
-    db.commit()
-    return db
 
 
 # ---------------------------------------------------------------------------
