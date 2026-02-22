@@ -80,6 +80,28 @@ uv sync
 uv run mcp run server.py
 ```
 
+### Pre-built Binaries (Standalone)
+
+Download standalone executables from [GitHub Releases](https://github.com/kapillamba4/code-memory/releases) — no Python installation required.
+
+| Platform | Architecture | File |
+|----------|-------------|------|
+| Linux | x86_64 | `code-memory-linux-x86_64` |
+| macOS | x86_64 (Intel) | `code-memory-macos-x86_64` |
+| macOS | ARM64 (Apple Silicon) | `code-memory-macos-arm64` |
+| Windows | x86_64 | `code-memory-windows-x86_64.exe` |
+
+```bash
+# Linux/macOS: Download and make executable
+chmod +x code-memory-*
+./code-memory-*
+
+# Windows: Run directly
+code-memory-windows-x86_64.exe
+```
+
+**Note:** The first run will download the embedding model (~600MB) to `~/.cache/huggingface/`. Subsequent runs use the cached model.
+
 ## Quickstart
 
 ### Prerequisites
@@ -112,9 +134,18 @@ uv run ruff format .
 
 # Build package
 uv build
+
+# Build standalone binary (requires pyinstaller)
+pip install pyinstaller
+pyinstaller --clean code-memory.spec
+# Binary output: dist/code-memory
 ```
 
 ## Configure Your MCP Host
+
+You can use either `uvx` (requires Python) or the standalone binary (no dependencies).
+
+### Using uvx (Python required)
 
 ### Gemini CLI / Gemini Code Assist
 
@@ -171,6 +202,31 @@ Add to `.vscode/mcp.json` in your workspace:
     "code-memory": {
       "command": "uvx",
       "args": ["code-memory"]
+    }
+  }
+}
+```
+
+### Using Standalone Binary (No Python required)
+
+Replace the path with the location of your downloaded binary:
+
+```json
+{
+  "mcpServers": {
+    "code-memory": {
+      "command": "/path/to/code-memory-linux-x86_64"
+    }
+  }
+}
+```
+
+For Windows:
+```json
+{
+  "mcpServers": {
+    "code-memory": {
+      "command": "C:\\path\\to\\code-memory-windows-x86_64.exe"
     }
   }
 }

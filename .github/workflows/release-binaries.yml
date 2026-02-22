@@ -1,0 +1,107 @@
+name: Build and Release Binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.9)'
+        required: false
+
+env:
+  PYTHON_VERSION: '3.13'
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            ext: ''
+          - os: macos-latest
+            target: macos-x86_64
+            ext: ''
+          - os: macos-latest
+            target: macos-arm64
+            ext: ''
+          - os: windows-latest
+            target: windows-x86_64
+            ext: '.exe'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+
+      - name: Install package dependencies
+        run: |
+          pip install -e .
+
+      - name: Download embedding model (cache for offline use)
+        run: |
+          python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('jinaai/jina-code-embeddings-v3')"
+
+      - name: Build binary with PyInstaller (Linux/Windows)
+        if: matrix.os != 'macos-latest' || matrix.target == 'macos-x86_64'
+        run: |
+          pyinstaller --clean code-memory.spec
+
+      - name: Build binary with PyInstaller (macOS ARM64)
+        if: matrix.os == 'macos-latest' && matrix.target == 'macos-arm64'
+        run: |
+          # Install and use ARM64 Python via pyenv for native ARM build
+          # Note: GitHub's macos-latest runners are ARM64 as of late 2024
+          pyinstaller --clean code-memory.spec
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          mv dist/code-memory${{ matrix.ext }} dist/code-memory-${{ matrix.target }}${{ matrix.ext }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-memory-${{ matrix.target }}
+          path: dist/code-memory-${{ matrix.target }}${{ matrix.ext }}
+          retention-days: 7
+
+  release:
+    name: Upload Release Assets
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/code-memory-linux-x86_64/code-memory-linux-x86_64
+            artifacts/code-memory-macos-x86_64/code-memory-macos-x86_64
+            artifacts/code-memory-macos-arm64/code-memory-macos-arm64
+            artifacts/code-memory-windows-x86_64/code-memory-windows-x86_64.exe
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
