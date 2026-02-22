@@ -54,20 +54,37 @@ Indexing is incremental - unchanged files are skipped automatically.
 # ── Tool 0: check_index_status ─────────────────────────────────────────────
 @mcp.tool()
 def check_index_status(directory: str = ".") -> dict:
-    """Check if the codebase has been indexed and get indexing statistics.
+    """USE THIS TOOL to check if the codebase has been indexed and whether search tools will return results. Call this BEFORE search_code or search_docs if you're unsure about indexing state.
 
-    Call this BEFORE using search tools to determine if indexing is needed.
-    If symbols_indexed is 0, you MUST call index_codebase first.
+    TRIGGER - Call this tool when:
+    - You're unsure if the codebase has been indexed
+    - search_code or search_docs returned empty results
+    - Starting work on a new project or session
+    - You want to verify index health before searching
+
+    This tool checks the SQLite database for indexed symbols and documentation chunks. It's a lightweight diagnostic - much faster than re-indexing.
+
+    INTERPRETING RESULTS:
+    - If "indexed" is false OR "symbols_indexed" is 0: You MUST call index_codebase first
+    - If "suggestion" says "CALL index_codebase FIRST": Indexing is required
+    - If "suggestion" says "ready to search": Search tools will work
+
+    Do NOT use this tool for:
+    - Actually indexing the codebase (use index_codebase)
+    - Searching for code or documentation
+    - Git history queries
 
     Args:
-        directory: The directory to check (default: current directory).
+        directory: Directory path to check (default "." for current directory).
 
     Returns:
-        Dictionary with indexing status including:
-        - indexed: boolean indicating if code has been indexed
-        - symbols_indexed: number of code symbols in the index
-        - doc_chunks_indexed: number of documentation chunks
-        - suggestion: "index_codebase" if indexing is needed, "ready" otherwise
+        Dictionary with:
+        - indexed: boolean - true if anything has been indexed
+        - symbols_indexed: count of code symbols in index
+        - doc_chunks_indexed: count of documentation chunks
+        - code_files_indexed: count of indexed code files
+        - doc_files_indexed: count of indexed doc files
+        - suggestion: "ready to search" or "CALL index_codebase FIRST"
     """
     try:
         database = db_mod.get_db()
@@ -107,23 +124,43 @@ def search_code(
     query: str,
     search_type: Literal["definition", "references", "file_structure"],
 ) -> dict:
-    """Search the indexed codebase for definitions, references, or file structure.
+    """USE THIS TOOL to find code symbols: function definitions, class declarations, variable assignments, and cross-references. Always prefer this over grep or file-reading tools when you need structural code knowledge.
 
-    IMPORTANT: This tool requires indexing first. If you get empty results or
-    haven't indexed recently, call `index_codebase(directory=".")` before searching.
+    PREREQUISITE: This tool requires indexing. If results are empty or you haven't indexed this session, call index_codebase(directory=".") first.
 
-    Uses hybrid retrieval (BM25 keyword search + dense vector semantic search)
-    with Reciprocal Rank Fusion.
+    This tool uses HYBRID RETRIEVAL (BM25 keyword search + dense vector semantic search with Reciprocal Rank Fusion) - more intelligent than plain text search.
+
+    WHEN TO USE EACH search_type:
+
+    1. "definition" - USE WHEN:
+       - User asks "where is X defined?" or "find the implementation of X"
+       - You need to locate a function, class, method, or variable
+       - Query can be exact symbol name OR semantic description
+       - Results ranked by hybrid relevance score
+
+    2. "references" - USE WHEN:
+       - User asks "where is X used?" or "find all usages of X"
+       - You need cross-references showing where a symbol is imported/called
+       - Query MUST be the exact symbol name
+       - Returns all files and line numbers where symbol appears
+
+    3. "file_structure" - USE WHEN:
+       - User asks "show me the structure of file X" or "what's in this file?"
+       - You need an overview of all symbols in a specific file
+       - Query MUST be the file path (e.g., "src/auth/login.py")
+       - Returns symbols ordered by line number
+
+    Do NOT use this tool for:
+    - Reading full file contents (use your built-in file reader)
+    - Git history queries (use search_history)
+    - Documentation/conceptual questions (use search_docs)
 
     Args:
-        query: Symbol name or semantic description of what you're looking for.
-        search_type:
-            - "definition": Find where a symbol is defined (hybrid search)
-            - "references": Find all cross-references to a symbol name
-            - "file_structure": List all symbols in a file, ordered by line
+        query: Symbol name (e.g., "authenticate_user") OR semantic description (e.g., "database connection handler"). For file_structure, use file path.
+        search_type: Must be exactly "definition", "references", or "file_structure".
 
     Returns:
-        List of matching results with file paths, line numbers, and source text.
+        List of results with file paths, line numbers, and source code snippets.
     """
     with logging_config.ToolLogger("search_code", query=query, search_type=search_type) as log:
         try:
@@ -173,21 +210,34 @@ def search_code(
 # ── Tool 2: index_codebase ────────────────────────────────────────────────
 @mcp.tool()
 def index_codebase(directory: str = ".") -> dict:
-    """Indexes or re-indexes source files and documentation in the given directory.
+    """YOU MUST CALL THIS TOOL FIRST before using search_code or search_docs. Use this tool to build the searchable index that powers all other code intelligence features.
 
-    Run this before using search_code or search_docs to ensure the database
-    is up to date. Uses tree-sitter for language-agnostic structural extraction
-    and generates embeddings for semantic search. Supports Python, JavaScript/
-    TypeScript, Java, Kotlin, Go, Rust, C/C++, Ruby, and more.
+    TRIGGER: Call this tool immediately when:
+    - Starting a new session with this codebase
+    - search_code or search_docs returns empty or unexpected results
+    - You haven't indexed recently or files have been modified
+    - User asks about code structure, definitions, or documentation
 
-    Also indexes markdown documentation files and extracts docstrings from
-    indexed code symbols. Unchanged files (by mtime) are automatically skipped.
+    This tool performs TWO critical operations:
+    1. CODE INDEXING: Uses tree-sitter for language-agnostic AST extraction (Python, JavaScript/TypeScript, Java, Kotlin, Go, Rust, C/C++, Ruby, and more). Extracts functions, classes, methods, variables, and cross-references.
+    2. DOCUMENTATION INDEXING: Parses markdown files, READMEs, and extracts docstrings from indexed code. Generates embeddings for semantic search.
+
+    IMPORTANT ADVANTAGES over built-in file search:
+    - Creates persistent structural knowledge (AST-based, not just text)
+    - Enables semantic search via vector embeddings
+    - Builds cross-reference graphs for "find all usages" queries
+    - Incremental indexing: unchanged files are automatically skipped
+
+    Do NOT use this tool for:
+    - Non-code files (images, binaries, data files)
+    - Single-file lookups (use search_code after indexing)
+    - Git history queries (use search_history instead)
 
     Args:
-        directory: The root directory to index (recursively).
+        directory: The root directory to index (default "."). Must be a valid path.
 
     Returns:
-        Summary of indexing results including code and documentation stats.
+        Summary with files_indexed, total_symbols, total_chunks, and details.
     """
     with logging_config.ToolLogger("index_codebase", directory=directory) as log:
         try:
@@ -263,26 +313,38 @@ def index_codebase(directory: str = ".") -> dict:
 # ── Tool 3: search_docs ────────────────────────────────────────────────────
 @mcp.tool()
 def search_docs(query: str, top_k: int = 10) -> dict:
-    """Search documentation to understand the codebase conceptually.
+    """USE THIS TOOL for conceptual understanding and "how does X work?" questions. Search markdown documentation, READMEs, and code docstrings using semantic search.
 
-    IMPORTANT: This tool requires indexing first. If you get empty results or
-    haven't indexed recently, call `index_codebase(directory=".")` before searching.
+    PREREQUISITE: This tool requires indexing. If results are empty or you haven't indexed this session, call index_codebase(directory=".") first.
 
-    Ideal for questions like:
-    - "How does authentication work?"
-    - "Explain the architecture"
-    - "What are the setup instructions?"
+    TRIGGER - Call this tool when the user asks:
+    - "How does [feature] work?"
+    - "Explain the architecture of..."
+    - "What are the setup/installation instructions?"
+    - "Show me the documentation for..."
+    - "Why was this designed this way?"
+    - Any question answered by README, CHANGELOG, or docstrings
 
-    Searches markdown files, READMEs, and docstrings using hybrid retrieval
-    (BM25 + semantic search with RRF fusion).
+    IMPORTANT: This is NOT for finding code implementations. For code locations, use search_code. This tool searches DOCUMENTATION, not source code.
+
+    Uses HYBRID RETRIEVAL (BM25 keyword search + dense vector semantic search with Reciprocal Rank Fusion) to find conceptually relevant documentation even when keywords don't match exactly.
+
+    Do NOT use this tool for:
+    - Finding function/class definitions (use search_code with "definition")
+    - Finding where code is used (use search_code with "references")
+    - Git history or commit messages (use search_history)
 
     Args:
-        query: A natural language question about the codebase.
-        top_k: Maximum number of results to return (default 10).
+        query: A natural language question (e.g., "How does authentication work?" or "API rate limiting"). Can be conversational - semantic search handles synonyms.
+        top_k: Maximum results to return (default 10, max 100).
 
     Returns:
-        Dictionary with 'results' containing matching documentation chunks
-        with source attribution (file, section, line numbers) and relevance score.
+        Dictionary with 'results' array. Each result includes:
+        - content: The documentation text
+        - file: Source file path
+        - section: Section heading (if applicable)
+        - line_start/line_end: Location in source
+        - relevance_score: Hybrid search score
     """
     with logging_config.ToolLogger("search_docs", query=query, top_k=top_k) as log:
         try:
@@ -325,20 +387,57 @@ def search_history(
     line_start: int | None = None,
     line_end: int | None = None,
 ) -> dict:
-    """Search local Git history to debug regressions, understand developer
-    intent, or find out WHY a specific change was made.
+    """USE THIS TOOL for Git history queries: understanding WHY changes were made, debugging regressions, or finding commit context. This tool operates on the local Git repository.
 
-    **search_type options:**
+    TRIGGER - Call this tool when the user asks:
+    - "Why was this code changed?" / "Who changed this?"
+    - "When was X introduced?" / "Find commits about X"
+    - "Debug this regression" / "What broke this?"
+    - "Show me the history of this file"
+    - "Who wrote this line?" (blame)
+    - "What changed in commit X?"
 
-    - ``commits`` — Search commit messages for *query* (case-insensitive).
-      Optionally filter to commits that touched *target_file*.
-    - ``file_history`` — Show the commit log for *target_file* (follows
-      renames).  *target_file* is required; *query* is ignored.
-    - ``blame`` — Run ``git blame`` on *target_file*, optionally limited to
-      *line_start*–*line_end*.  *target_file* is required.
-    - ``commit_detail`` — Get full metadata and diff for one commit.
-      Pass the commit hash as *query*.  Optionally set *target_file* to
-      restrict the diff to that file.
+    This tool does NOT require indexing - it queries Git directly.
+
+    WHEN TO USE EACH search_type:
+
+    1. "commits" - USE WHEN:
+       - User asks "find commits about X" or "search commit messages"
+       - Query is a keyword or phrase to search in commit messages
+       - Optionally set target_file to filter commits touching that file
+       - Args: query (required), target_file (optional)
+
+    2. "file_history" - USE WHEN:
+       - User asks "show history of file X" or "what happened to this file?"
+       - Shows commit log for a specific file (follows renames)
+       - target_file is REQUIRED; query is ignored
+       - Args: target_file (required)
+
+    3. "blame" - USE WHEN:
+       - User asks "who wrote this line?" or "who last modified this?"
+       - Shows line-by-line commit attribution
+       - target_file is REQUIRED; optionally limit to line range
+       - Args: target_file (required), line_start/line_end (optional)
+
+    4. "commit_detail" - USE WHEN:
+       - User asks "show me commit X" or "what changed in this commit?"
+       - Query is the commit hash (full or abbreviated)
+       - Optionally set target_file to show only changes to that file
+       - Args: query=commit_hash (required), target_file (optional)
+
+    Do NOT use this tool for:
+    - Finding code definitions (use search_code)
+    - Reading documentation (use search_docs)
+    - Non-Git questions
+
+    Args:
+        query: Search term for commits, or commit hash for commit_detail.
+        search_type: Must be exactly "commits", "file_history", "blame", or "commit_detail".
+        target_file: File path (required for file_history and blame).
+        line_start/line_end: Line range for blame (optional).
+
+    Returns:
+        Varies by search_type. All include status and structured results.
     """
     with logging_config.ToolLogger("search_history", query=query, search_type=search_type,
                                    target_file=target_file) as log:
