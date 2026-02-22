@@ -7,10 +7,8 @@ and indexes them for hybrid retrieval (BM25 + vector search).
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
-from pathlib import Path
 
 from markdown_it import MarkdownIt
 

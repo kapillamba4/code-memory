@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from tree_sitter import Language, Parser, Node
+from tree_sitter import Language, Node, Parser
 
 import db as db_mod
 
@@ -110,7 +110,6 @@ _NODE_KIND_MAP: dict[str, tuple[str, bool]] = {
     "constructor_declaration":    ("method", False),
     "interface_declaration":      ("class", True),
     # Go  (function_declaration already mapped above for JS/TS/Kotlin)
-    "method_declaration":         ("method", False),
     "type_spec":                  ("class", False),
     # Rust
     "function_item":              ("function", False),
@@ -119,12 +118,9 @@ _NODE_KIND_MAP: dict[str, tuple[str, bool]] = {
     "enum_item":                  ("class", False),
     "trait_item":                 ("class", True),
     # C / C++
-    "function_definition":        ("function", False),
     "struct_specifier":           ("class", False),
     "class_specifier":            ("class", True),
     # Kotlin
-    "function_declaration":       ("function", False),
-    "class_declaration":          ("class", True),
     "object_declaration":         ("class", True),
     "companion_object":           ("class", True),
     # Ruby

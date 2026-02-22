@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import logging
 import io
-
-import pytest
+import logging
 
 import logging_config
 

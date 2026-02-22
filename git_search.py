@@ -15,13 +15,12 @@ Design rules
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import git
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -34,7 +33,7 @@ def _commit_to_dict(commit: git.Commit, *, include_files_changed_count: bool = F
         include_files_changed_count: If True, compute the number of files
             changed (triggers a diff — slow for bulk iteration).
     """
-    dt = datetime.fromtimestamp(commit.committed_date, tz=timezone.utc)
+    dt = datetime.fromtimestamp(commit.committed_date, tz=UTC)
     result: dict[str, Any] = {
         "hash": commit.hexsha[:7],
         "full_hash": commit.hexsha,
@@ -143,7 +142,7 @@ def get_commit_detail(
         return {"error": f"Could not resolve commit '{commit_hash}': {exc}"}
 
     try:
-        dt = datetime.fromtimestamp(commit.committed_date, tz=timezone.utc)
+        dt = datetime.fromtimestamp(commit.committed_date, tz=UTC)
 
         parent_hashes = [p.hexsha[:7] for p in commit.parents]
 
@@ -271,7 +270,7 @@ def get_blame(
                     "full_hash": commit.hexsha,
                     "author": str(commit.author),
                     "date": datetime.fromtimestamp(
-                        commit.committed_date, tz=timezone.utc
+                        commit.committed_date, tz=UTC
                     ).isoformat(),
                     "line_content": line_text,
                     "commit_message": commit.message.strip().split("\n")[0],

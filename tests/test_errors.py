@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import pytest
-
 from errors import (
     CodeMemoryError,
     DatabaseError,
-    IndexingError,
-    GitError,
-    ValidationError,
     EmbeddingError,
+    GitError,
+    IndexingError,
+    ValidationError,
     format_error,
 )
 

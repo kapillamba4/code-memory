@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import sqlite_vec
@@ -220,7 +219,7 @@ def file_hash(filepath: str) -> str:
 
 def upsert_file(db: sqlite3.Connection, path: str, last_modified: float, fhash: str) -> int:
     """Insert or update a file record. Returns the file_id."""
-    cur = db.execute(
+    db.execute(
         """
         INSERT INTO files (path, last_modified, file_hash)
         VALUES (?, ?, ?)

@@ -9,10 +9,8 @@ structure.
 from __future__ import annotations
 
 import struct
-from typing import Any
 
 import db as db_mod
-
 
 # ---------------------------------------------------------------------------
 # Hybrid search (BM25 + vector → RRF)

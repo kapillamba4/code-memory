@@ -473,8 +473,9 @@ def search_history(
     with logging_config.ToolLogger("search_history", query=query, search_type=search_type,
                                    target_file=target_file) as log:
         try:
-            import git_search as gs
             from git.exc import InvalidGitRepositoryError, NoSuchPathError
+
+            import git_search as gs
 
             # Validate inputs
             search_type = val.validate_search_type(

@@ -96,7 +96,7 @@ class ToolLogger:
         self.result_count: int | None = None
         self.error: str | None = None
 
-    def __enter__(self) -> "ToolLogger":
+    def __enter__(self) -> ToolLogger:
         self.start_time = datetime.now()
         # Sanitize params for logging (don't log sensitive data)
         safe_params = {k: v for k, v in self.params.items() if v is not None}

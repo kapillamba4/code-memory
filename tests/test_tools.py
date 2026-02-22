@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-import sys
-
 
 class TestSearchCodeValidation:
     """Tests for search_code tool input validation."""
