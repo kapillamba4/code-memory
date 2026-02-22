@@ -109,6 +109,21 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
+### Claude Code (CLI)
+
+Add to `.mcp.json` in your project root or `~/.mcp.json` for global access:
+
+```json
+{
+  "mcpServers": {
+    "code-memory": {
+      "command": "uvx",
+      "args": ["code-memory"]
+    }
+  }
+}
+```
+
 ### VS Code (Copilot / Continue)
 
 Add to `.vscode/mcp.json` in your workspace:
