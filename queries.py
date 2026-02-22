@@ -444,3 +444,102 @@ def _add_context_chunks(results: list[dict], db) -> list[dict]:
         })
 
     return enriched
+
+
+# ---------------------------------------------------------------------------
+# Topic Discovery (Semantic Code Search)
+# ---------------------------------------------------------------------------
+
+
+def discover_topic(topic_query: str, db, top_k: int = 15) -> list[dict]:
+    """Discover files and code related to a high-level topic or feature.
+
+    This function performs broad semantic search across both code symbols
+    AND documentation chunks to find all files related to a conceptual topic.
+    Results are aggregated and deduplicated by file path.
+
+    This is the PRIMARY function for "find all files related to X" queries
+    where X is a feature, domain concept, or topic (e.g., "auth", "workouts",
+    "payment processing", "user notifications").
+
+    Args:
+        topic_query: A natural language topic, feature name, or domain concept.
+                     Examples: "authentication", "workout tracking", "email notifications"
+        db: An open ``sqlite3.Connection``.
+        top_k: Maximum number of files to return (default 15).
+
+    Returns:
+        A list of file-level results, each containing:
+        - file_path: Path to the relevant file
+        - relevance_score: Combined semantic relevance score
+        - matched_symbols: List of symbol names that matched the topic
+        - matched_docs: List of doc section titles that matched
+        - summary: Brief description of what in this file is relevant
+    """
+    # Run parallel searches on both code symbols and documentation
+    code_results = hybrid_search(topic_query, db, top_k=50)
+    doc_results = search_documentation(topic_query, db, top_k=50)
+
+    # Aggregate by file path, collecting all matched items
+    file_aggregates: dict[str, dict] = {}
+
+    for r in code_results:
+        fp = r.get("file_path", "")
+        if not fp:
+            continue
+        if fp not in file_aggregates:
+            file_aggregates[fp] = {
+                "file_path": fp,
+                "relevance_score": 0.0,
+                "matched_symbols": [],
+                "matched_docs": [],
+                "symbol_kinds": set(),
+            }
+        file_aggregates[fp]["relevance_score"] += r.get("score", 0.5)
+        file_aggregates[fp]["matched_symbols"].append(r.get("name", ""))
+        file_aggregates[fp]["symbol_kinds"].add(r.get("kind", ""))
+
+    for r in doc_results:
+        fp = r.get("source_file", "")
+        if not fp:
+            continue
+        if fp not in file_aggregates:
+            file_aggregates[fp] = {
+                "file_path": fp,
+                "relevance_score": 0.0,
+                "matched_symbols": [],
+                "matched_docs": [],
+                "symbol_kinds": set(),
+            }
+        file_aggregates[fp]["relevance_score"] += r.get("score", 0.5)
+        section = r.get("section_title", "")
+        if section:
+            file_aggregates[fp]["matched_docs"].append(section)
+
+    # Sort by relevance and take top_k
+    sorted_files = sorted(
+        file_aggregates.values(),
+        key=lambda x: x["relevance_score"],
+        reverse=True
+    )[:top_k]
+
+    # Build final results with summaries
+    results = []
+    for item in sorted_files:
+        # Generate a summary of what matched
+        symbol_summary = ", ".join(item["matched_symbols"][:5])
+        if len(item["matched_symbols"]) > 5:
+            symbol_summary += f" (+{len(item['matched_symbols']) - 5} more)"
+
+        kinds = ", ".join(k for k in item["symbol_kinds"] if k)
+
+        results.append({
+            "file_path": item["file_path"],
+            "relevance_score": round(item["relevance_score"], 4),
+            "matched_symbols": item["matched_symbols"][:10],
+            "matched_docs": item["matched_docs"][:5],
+            "symbol_kinds": kinds,
+            "summary": f"Contains {kinds}: {symbol_summary}" if kinds else f"Related symbols: {symbol_summary}",
+        })
+
+    return results

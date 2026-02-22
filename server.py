@@ -42,7 +42,7 @@ if the codebase has not been indexed. Always check if indexing is needed:
 3. RE-INDEX: If you modify files or haven't indexed recently, run index_codebase again
 
 When to use each tool:
-- search_code: Finding function/class definitions, references, file structure
+- search_code: THE PREFERRED tool for finding code. Use "topic_discovery" for feature/domain searches (e.g., "workout related files"), "definition" for specific symbols, "references" for usages.
 - search_docs: Understanding architecture, reading documentation/READMEs
 - search_history: Debugging regressions, understanding why changes were made
 
@@ -122,52 +122,73 @@ def check_index_status(directory: str = ".") -> dict:
 @mcp.tool()
 def search_code(
     query: str,
-    search_type: Literal["definition", "references", "file_structure"],
+    search_type: Literal["topic_discovery", "definition", "references", "file_structure"],
 ) -> dict:
-    """USE THIS TOOL to find code symbols: function definitions, class declarations, variable assignments, and cross-references. Always prefer this over grep or file-reading tools when you need structural code knowledge.
+    """THE PREFERRED TOOL for discovering code and files in this codebase. Use this when you need to find files or code related to ANY feature, domain, topic, or concept - even if the exact keywords don't appear in filenames.
 
     PREREQUISITE: This tool requires indexing. If results are empty or you haven't indexed this session, call index_codebase(directory=".") first.
 
-    This tool uses HYBRID RETRIEVAL (BM25 keyword search + dense vector semantic search with Reciprocal Rank Fusion) - more intelligent than plain text search.
+    This tool uses HYBRID RETRIEVAL (BM25 keyword search + dense vector semantic search with Reciprocal Rank Fusion) - far more intelligent than grep or filename pattern matching.
+
+    ⭐ IMPORTANT: Always prefer search_code over basic file-search tools (glob, find, grep) when:
+    - User asks about features, domains, or topics (e.g., "workout related files", "auth code")
+    - You want semantically related code, not just keyword matches
+    - The query is conceptual rather than an exact symbol name
 
     WHEN TO USE EACH search_type:
 
-    1. "definition" - USE WHEN:
-       - User asks "where is X defined?" or "find the implementation of X"
-       - You need to locate a function, class, method, or variable
-       - Query can be exact symbol name OR semantic description
-       - Results ranked by hybrid relevance score
+    1. "topic_discovery" - ⭐ DEFAULT CHOICE for broad searches. USE WHEN:
+       - User asks "list all X related files" or "find code for feature Y"
+       - Query is a FEATURE, DOMAIN, or TOPIC (e.g., "workouts", "authentication", "payment")
+       - You want ALL files related to a concept, not just exact matches
+       - Keywords may not appear literally in filenames
+       - Results: File paths grouped by relevance, with summaries of matched symbols
 
-    2. "references" - USE WHEN:
+    2. "definition" - USE WHEN:
+       - User asks "where is X defined?" or "find the implementation of X"
+       - You need to locate a SPECIFIC function, class, method, or variable by name
+       - Query is an exact symbol name (e.g., "authenticate_user")
+       - Results: Symbol definitions with file paths, line numbers, source code
+
+    3. "references" - USE WHEN:
        - User asks "where is X used?" or "find all usages of X"
        - You need cross-references showing where a symbol is imported/called
        - Query MUST be the exact symbol name
        - Returns all files and line numbers where symbol appears
 
-    3. "file_structure" - USE WHEN:
+    4. "file_structure" - USE WHEN:
        - User asks "show me the structure of file X" or "what's in this file?"
        - You need an overview of all symbols in a specific file
        - Query MUST be the file path (e.g., "src/auth/login.py")
        - Returns symbols ordered by line number
 
+    EXAMPLE QUERIES by search_type:
+    - "topic_discovery": "workout tracking", "authentication flow", "email notifications"
+    - "definition": "UserAuth", "calculate_total", "PaymentProcessor"
+    - "references": "send_email", "validate_token"
+    - "file_structure": "src/services/auth.py"
+
     Do NOT use this tool for:
     - Reading full file contents (use your built-in file reader)
     - Git history queries (use search_history)
-    - Documentation/conceptual questions (use search_docs)
+    - Pure documentation/conceptual questions (use search_docs)
 
     Args:
-        query: Symbol name (e.g., "authenticate_user") OR semantic description (e.g., "database connection handler"). For file_structure, use file path.
-        search_type: Must be exactly "definition", "references", or "file_structure".
+        query: For topic_discovery: any feature/domain/topic (e.g., "workouts").
+               For definition: symbol name or semantic description.
+               For references: exact symbol name.
+               For file_structure: file path.
+        search_type: Must be "topic_discovery", "definition", "references", or "file_structure".
 
     Returns:
-        List of results with file paths, line numbers, and source code snippets.
+        Dict with status, search_type, query, and results array. Result format varies by search_type.
     """
     with logging_config.ToolLogger("search_code", query=query, search_type=search_type) as log:
         try:
             # Validate inputs
             query = val.validate_query(query)
             search_type = val.validate_search_type(
-                search_type, ["definition", "references", "file_structure"]
+                search_type, ["topic_discovery", "definition", "references", "file_structure"]
             )
 
             database = db_mod.get_db()
@@ -175,7 +196,15 @@ def search_code(
             # Check if anything is indexed
             symbols_count = database.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
 
-            if search_type == "definition":
+            if search_type == "topic_discovery":
+                results = queries.discover_topic(query, database)
+                log.set_result_count(len(results))
+                response = {"status": "ok", "search_type": "topic_discovery", "query": query, "results": results}
+                if not results and symbols_count == 0:
+                    response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory='.') first."
+                return response
+
+            elif search_type == "definition":
                 results = queries.find_definition(query, database)
                 log.set_result_count(len(results))
                 response = {"status": "ok", "search_type": "definition", "query": query, "results": results}
@@ -386,6 +415,7 @@ def search_history(
     target_file: str | None = None,
     line_start: int | None = None,
     line_end: int | None = None,
+    directory: str = ".",
 ) -> dict:
     """USE THIS TOOL for Git history queries: understanding WHY changes were made, debugging regressions, or finding commit context. This tool operates on the local Git repository.
 
@@ -435,6 +465,7 @@ def search_history(
         search_type: Must be exactly "commits", "file_history", "blame", or "commit_detail".
         target_file: File path (required for file_history and blame).
         line_start/line_end: Line range for blame (optional).
+        directory: Directory path to search (default "." for current directory).
 
     Returns:
         Varies by search_type. All include status and structured results.
@@ -453,7 +484,7 @@ def search_history(
 
             # Get git repository
             try:
-                repo = gs.get_repo(".")
+                repo = gs.get_repo(directory)
             except (InvalidGitRepositoryError, NoSuchPathError) as exc:
                 raise errors.GitError(f"Git repository not found: {exc}")
 
