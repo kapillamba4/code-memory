@@ -258,11 +258,11 @@ Run `index_codebase(directory=".")` first to index your code and documentation. 
 
 ### Slow indexing
 
-Indexing generates embeddings using a local sentence-transformers model. The first run downloads the model (~90MB). Subsequent runs are faster.
+Indexing generates embeddings using a local sentence-transformers model. The first run downloads the model (~600MB for `jina-code-embeddings-0.5b`). Subsequent runs are faster.
 
 ### Embedding model errors
 
-Ensure you have enough disk space and memory. The `all-MiniLM-L6-v2` model requires ~500MB RAM when loaded.
+Ensure you have enough disk space and memory. The `jina-code-embeddings-0.5b` model requires ~1GB RAM when loaded.
 
 ## Roadmap
 
