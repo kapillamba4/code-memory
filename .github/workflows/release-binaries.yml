@@ -53,7 +53,7 @@ jobs:
 
       - name: Download embedding model (cache for offline use)
         run: |
-          python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('jinaai/jina-code-embeddings-v3')"
+          python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('jinaai/jina-code-embeddings-0.5b', trust_remote_code=True)"
 
       - name: Build binary with PyInstaller (Linux/Windows)
         if: matrix.os != 'macos-latest' || matrix.target == 'macos-x86_64'
