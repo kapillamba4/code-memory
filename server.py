@@ -37,7 +37,7 @@ CRITICAL WORKFLOW: You MUST call `index_codebase` BEFORE using any search tools.
 The search tools (search_code, search_docs, search_history) will return empty results
 if the codebase has not been indexed. Always check if indexing is needed:
 
-1. FIRST: Call `index_codebase(directory=".")` to index the current project
+1. FIRST: Call `index_codebase(directory)` to index the project
 2. THEN: Use search_code, search_docs, or search_history to find information
 3. RE-INDEX: If you modify files or haven't indexed recently, run index_codebase again
 
@@ -53,7 +53,7 @@ Indexing is incremental - unchanged files are skipped automatically.
 
 # ── Tool 0: check_index_status ─────────────────────────────────────────────
 @mcp.tool()
-def check_index_status(directory: str = ".") -> dict:
+def check_index_status(directory: str) -> dict:
     """USE THIS TOOL to check if the codebase has been indexed and whether search tools will return results. Call this BEFORE search_code or search_docs if you're unsure about indexing state.
 
     TRIGGER - Call this tool when:
@@ -75,7 +75,7 @@ def check_index_status(directory: str = ".") -> dict:
     - Git history queries
 
     Args:
-        directory: Directory path to check (default "." for current directory).
+        directory: Path to the project directory to check.
 
     Returns:
         Dictionary with:
@@ -87,7 +87,7 @@ def check_index_status(directory: str = ".") -> dict:
         - suggestion: "ready to search" or "CALL index_codebase FIRST"
     """
     try:
-        database = db_mod.get_db()
+        database = db_mod.get_db(directory)
 
         # Count symbols
         symbols_count = database.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
@@ -123,10 +123,11 @@ def check_index_status(directory: str = ".") -> dict:
 def search_code(
     query: str,
     search_type: Literal["topic_discovery", "definition", "references", "file_structure"],
+    directory: str,
 ) -> dict:
     """THE PREFERRED TOOL for discovering code and files in this codebase. Use this when you need to find files or code related to ANY feature, domain, topic, or concept - even if the exact keywords don't appear in filenames.
 
-    PREREQUISITE: This tool requires indexing. If results are empty or you haven't indexed this session, call index_codebase(directory=".") first.
+    PREREQUISITE: This tool requires indexing. If results are empty or you haven't indexed this session, call index_codebase(directory) first.
 
     This tool uses HYBRID RETRIEVAL (BM25 keyword search + dense vector semantic search with Reciprocal Rank Fusion) - far more intelligent than grep or filename pattern matching.
 
@@ -179,6 +180,7 @@ def search_code(
                For references: exact symbol name.
                For file_structure: file path.
         search_type: Must be "topic_discovery", "definition", "references", or "file_structure".
+        directory: Path to the project directory to search.
 
     Returns:
         Dict with status, search_type, query, and results array. Result format varies by search_type.
@@ -191,7 +193,7 @@ def search_code(
                 search_type, ["topic_discovery", "definition", "references", "file_structure"]
             )
 
-            database = db_mod.get_db()
+            database = db_mod.get_db(directory)
 
             # Check if anything is indexed
             symbols_count = database.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
@@ -201,7 +203,7 @@ def search_code(
                 log.set_result_count(len(results))
                 response = {"status": "ok", "search_type": "topic_discovery", "query": query, "results": results}
                 if not results and symbols_count == 0:
-                    response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory='.') first."
+                    response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."
                 return response
 
             elif search_type == "definition":
@@ -209,7 +211,7 @@ def search_code(
                 log.set_result_count(len(results))
                 response = {"status": "ok", "search_type": "definition", "query": query, "results": results}
                 if not results and symbols_count == 0:
-                    response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory='.') first."
+                    response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."
                 return response
 
             elif search_type == "references":
@@ -217,7 +219,7 @@ def search_code(
                 log.set_result_count(len(results))
                 response = {"status": "ok", "search_type": "references", "query": query, "results": results}
                 if not results and symbols_count == 0:
-                    response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory='.') first."
+                    response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."
                 return response
 
             elif search_type == "file_structure":
@@ -225,7 +227,7 @@ def search_code(
                 log.set_result_count(len(results))
                 response = {"status": "ok", "search_type": "file_structure", "query": query, "results": results}
                 if not results and symbols_count == 0:
-                    response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory='.') first."
+                    response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."
                 return response
 
             return errors.format_error(errors.ValidationError(f"Unknown search_type: {search_type}"))
@@ -238,7 +240,7 @@ def search_code(
 
 # ── Tool 2: index_codebase ────────────────────────────────────────────────
 @mcp.tool()
-def index_codebase(directory: str = ".") -> dict:
+def index_codebase(directory: str) -> dict:
     """YOU MUST CALL THIS TOOL FIRST before using search_code or search_docs. Use this tool to build the searchable index that powers all other code intelligence features.
 
     TRIGGER: Call this tool immediately when:
@@ -263,7 +265,7 @@ def index_codebase(directory: str = ".") -> dict:
     - Git history queries (use search_history instead)
 
     Args:
-        directory: The root directory to index (default "."). Must be a valid path.
+        directory: The root directory to index. Must be a valid path.
 
     Returns:
         Summary with files_indexed, total_symbols, total_chunks, and details.
@@ -273,7 +275,7 @@ def index_codebase(directory: str = ".") -> dict:
             # Validate directory
             directory_path = val.validate_directory(directory)
 
-            database = db_mod.get_db()
+            database = db_mod.get_db(str(directory_path))
 
             # Index code files
             code_logger = logging_config.IndexingLogger("code")
@@ -341,10 +343,10 @@ def index_codebase(directory: str = ".") -> dict:
 
 # ── Tool 3: search_docs ────────────────────────────────────────────────────
 @mcp.tool()
-def search_docs(query: str, top_k: int = 10) -> dict:
+def search_docs(query: str, directory: str, top_k: int = 10) -> dict:
     """USE THIS TOOL for conceptual understanding and "how does X work?" questions. Search markdown documentation, READMEs, and code docstrings using semantic search.
 
-    PREREQUISITE: This tool requires indexing. If results are empty or you haven't indexed this session, call index_codebase(directory=".") first.
+    PREREQUISITE: This tool requires indexing. If results are empty or you haven't indexed this session, call index_codebase(directory) first.
 
     TRIGGER - Call this tool when the user asks:
     - "How does [feature] work?"
@@ -365,6 +367,7 @@ def search_docs(query: str, top_k: int = 10) -> dict:
 
     Args:
         query: A natural language question (e.g., "How does authentication work?" or "API rate limiting"). Can be conversational - semantic search handles synonyms.
+        directory: Path to the project directory to search.
         top_k: Maximum results to return (default 10, max 100).
 
     Returns:
@@ -381,7 +384,7 @@ def search_docs(query: str, top_k: int = 10) -> dict:
             query = val.validate_query(query)
             top_k = val.validate_top_k(top_k)
 
-            database = db_mod.get_db()
+            database = db_mod.get_db(directory)
 
             # Check if anything is indexed
             doc_chunks_count = database.execute("SELECT COUNT(*) FROM doc_chunks").fetchone()[0]
@@ -397,7 +400,7 @@ def search_docs(query: str, top_k: int = 10) -> dict:
             }
 
             if not results and doc_chunks_count == 0:
-                response["hint"] = "No results. Documentation may not be indexed. Call index_codebase(directory='.') first."
+                response["hint"] = "No results. Documentation may not be indexed. Call index_codebase(directory) first."
 
             return response
 
@@ -411,11 +414,11 @@ def search_docs(query: str, top_k: int = 10) -> dict:
 @mcp.tool()
 def search_history(
     query: str,
+    directory: str,
     search_type: Literal["commits", "file_history", "blame", "commit_detail"] = "commits",
     target_file: str | None = None,
     line_start: int | None = None,
     line_end: int | None = None,
-    directory: str = ".",
 ) -> dict:
     """USE THIS TOOL for Git history queries: understanding WHY changes were made, debugging regressions, or finding commit context. This tool operates on the local Git repository.
 
@@ -462,10 +465,10 @@ def search_history(
 
     Args:
         query: Search term for commits, or commit hash for commit_detail.
+        directory: Path to the project directory (git repository).
         search_type: Must be exactly "commits", "file_history", "blame", or "commit_detail".
         target_file: File path (required for file_history and blame).
         line_start/line_end: Line range for blame (optional).
-        directory: Directory path to search (default "." for current directory).
 
     Returns:
         Varies by search_type. All include status and structured results.

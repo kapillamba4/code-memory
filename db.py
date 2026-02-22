@@ -233,15 +233,20 @@ END;
 """
 
 
-def get_db(db_path: str = "code_memory.db") -> sqlite3.Connection:
+def get_db(project_dir: str) -> sqlite3.Connection:
     """Open (or create) the database, load sqlite-vec, and ensure schema.
 
+    The database is stored as {project_dir}/code_memory.db to ensure each
+    project has its own isolated index.
+
     Args:
-        db_path: Path to the SQLite database file.
+        project_dir: The project directory where code_memory.db will be stored.
 
     Returns:
         A ready-to-use ``sqlite3.Connection`` with WAL mode and foreign keys.
     """
+    import os
+    db_path = os.path.join(os.path.abspath(project_dir), "code_memory.db")
     db = sqlite3.connect(db_path)
     db.enable_load_extension(True)
     sqlite_vec.load(db)
