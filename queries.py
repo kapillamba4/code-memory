@@ -249,3 +249,198 @@ def get_file_structure(file_path: str, db) -> list[dict]:
         }
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Documentation search (Milestone 4)
+# ---------------------------------------------------------------------------
+
+
+def _doc_bm25_search(query: str, db, top_k: int = 50) -> list[dict]:
+    """Run FTS5 BM25 search against ``doc_chunks_fts``.
+
+    Returns a ranked list of dicts with chunk metadata and bm25_score.
+    """
+    safe_query = query.replace('"', '""')
+    try:
+        rows = db.execute(
+            """
+            SELECT dc.id, dc.section_title, dc.content, df.path, df.doc_type,
+                   dc.line_start, dc.line_end, bm25(doc_chunks_fts) AS score
+            FROM doc_chunks_fts
+            JOIN doc_chunks dc ON dc.id = doc_chunks_fts.rowid
+            JOIN doc_files   df ON df.id = dc.doc_file_id
+            WHERE doc_chunks_fts MATCH ?
+            ORDER BY score
+            LIMIT ?
+            """,
+            (safe_query, top_k),
+        ).fetchall()
+    except Exception:
+        return []
+
+    return [
+        {
+            "chunk_id": r[0],
+            "section_title": r[1],
+            "content": r[2],
+            "source_file": r[3],
+            "doc_type": r[4],
+            "line_start": r[5],
+            "line_end": r[6],
+            "bm25_score": r[7],
+        }
+        for r in rows
+    ]
+
+
+def _doc_vector_search(query: str, db, top_k: int = 50) -> list[dict]:
+    """Run dense vector nearest-neighbour search on doc_embeddings."""
+    query_vec = db_mod.embed_text(query)
+    query_blob = struct.pack(f"{len(query_vec)}f", *query_vec)
+
+    rows = db.execute(
+        """
+        SELECT de.chunk_id, de.distance,
+               dc.section_title, dc.content, df.path, df.doc_type,
+               dc.line_start, dc.line_end
+        FROM doc_embeddings de
+        JOIN doc_chunks dc ON dc.id = de.chunk_id
+        JOIN doc_files   df ON df.id = dc.doc_file_id
+        WHERE de.embedding MATCH ?
+        AND   de.k = ?
+        ORDER BY de.distance
+        """,
+        (query_blob, top_k),
+    ).fetchall()
+
+    return [
+        {
+            "chunk_id": r[0],
+            "vec_distance": r[1],
+            "section_title": r[2],
+            "content": r[3],
+            "source_file": r[4],
+            "doc_type": r[5],
+            "line_start": r[6],
+            "line_end": r[7],
+        }
+        for r in rows
+    ]
+
+
+def search_documentation(query: str, db, top_k: int = 10,
+                         include_context: bool = False) -> list[dict]:
+    """Perform hybrid search over documentation chunks.
+
+    Uses BM25 + vector search with Reciprocal Rank Fusion.
+
+    Args:
+        query: Natural language query.
+        db: Database connection.
+        top_k: Maximum results to return.
+        include_context: If True, include adjacent chunks for context.
+
+    Returns:
+        List of matching chunks with source attribution and RRF scores.
+    """
+    bm25_results = _doc_bm25_search(query, db, top_k=50)
+    vec_results = _doc_vector_search(query, db, top_k=50)
+
+    # Build RRF score map keyed by chunk_id
+    scores: dict[int, float] = {}
+    details: dict[int, dict] = {}
+
+    for rank, r in enumerate(bm25_results, start=1):
+        cid = r["chunk_id"]
+        scores[cid] = scores.get(cid, 0.0) + 1.0 / (_RRF_K + rank)
+        details[cid] = {
+            "content": r["content"],
+            "source_file": r["source_file"],
+            "section_title": r["section_title"],
+            "line_start": r["line_start"],
+            "line_end": r["line_end"],
+            "doc_type": r["doc_type"],
+        }
+
+    for rank, r in enumerate(vec_results, start=1):
+        cid = r["chunk_id"]
+        scores[cid] = scores.get(cid, 0.0) + 1.0 / (_RRF_K + rank)
+        if cid not in details:
+            details[cid] = {
+                "content": r["content"],
+                "source_file": r["source_file"],
+                "section_title": r["section_title"],
+                "line_start": r["line_start"],
+                "line_end": r["line_end"],
+                "doc_type": r["doc_type"],
+            }
+
+    # Sort by descending RRF score
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
+
+    results = [
+        {**details[cid], "score": round(score, 6)}
+        for cid, score in ranked
+    ]
+
+    # Optionally include adjacent chunks for context
+    if include_context and results:
+        results = _add_context_chunks(results, db)
+
+    return results
+
+
+def _add_context_chunks(results: list[dict], db) -> list[dict]:
+    """Add adjacent chunks to results for additional context."""
+    enriched = []
+
+    for result in results:
+        # Get the chunk's file and index
+        row = db.execute(
+            """
+            SELECT dc.chunk_index, dc.doc_file_id
+            FROM doc_chunks dc
+            JOIN doc_files df ON df.id = dc.doc_file_id
+            WHERE df.path = ? AND dc.line_start = ? AND dc.line_end = ?
+            """,
+            (result["source_file"], result["line_start"], result["line_end"]),
+        ).fetchone()
+
+        if not row:
+            enriched.append(result)
+            continue
+
+        chunk_index, doc_file_id = row
+
+        # Get previous and next chunks
+        context_parts = []
+
+        prev = db.execute(
+            """
+            SELECT content FROM doc_chunks
+            WHERE doc_file_id = ? AND chunk_index = ?
+            """,
+            (doc_file_id, chunk_index - 1),
+        ).fetchone()
+        if prev:
+            context_parts.append({"type": "previous", "content": prev[0][:200]})
+
+        context_parts.append({"type": "current", "content": result["content"]})
+
+        next_chunk = db.execute(
+            """
+            SELECT content FROM doc_chunks
+            WHERE doc_file_id = ? AND chunk_index = ?
+            """,
+            (doc_file_id, chunk_index + 1),
+        ).fetchone()
+        if next_chunk:
+            context_parts.append({"type": "next", "content": next_chunk[0][:200]})
+
+        enriched.append({
+            **result,
+            "context": context_parts,
+        })
+
+    return enriched

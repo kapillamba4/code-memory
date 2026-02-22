@@ -15,6 +15,7 @@ from typing import Literal
 from mcp.server.fastmcp import FastMCP
 
 import db as db_mod
+import doc_parser as doc_parser_mod
 import parser as parser_mod
 import queries
 
@@ -60,50 +61,96 @@ def search_code(
 # ── Tool 2: index_codebase ───────────────────────────────────────────
 @mcp.tool()
 def index_codebase(directory: str) -> dict:
-    """Indexes or re-indexes source files in the given directory.
+    """Indexes or re-indexes source files and documentation in the given directory.
 
-    Run this before using search_code to ensure the database is up to date.
-    Uses tree-sitter for language-agnostic structural extraction and generates
-    embeddings for semantic search.  Supports Python, JavaScript/TypeScript,
-    Java, Kotlin, Go, Rust, C/C++, Ruby, and more.  Unsupported file types
-    fall back to whole-file indexing.  Unchanged files (by mtime) are
-    automatically skipped.
+    Run this before using search_code or search_docs to ensure the database
+    is up to date. Uses tree-sitter for language-agnostic structural extraction
+    and generates embeddings for semantic search. Supports Python, JavaScript/
+    TypeScript, Java, Kotlin, Go, Rust, C/C++, Ruby, and more.
+
+    Also indexes markdown documentation files and extracts docstrings from
+    indexed code symbols. Unchanged files (by mtime) are automatically skipped.
 
     Args:
         directory: The root directory to index (recursively).
 
     Returns:
-        Summary of indexing results.
+        Summary of indexing results including code and documentation stats.
     """
     database = db_mod.get_db()
-    results = parser_mod.index_directory(directory, database)
 
-    indexed = [r for r in results if not r.get("skipped")]
-    skipped = [r for r in results if r.get("skipped")]
+    # Index code files
+    code_results = parser_mod.index_directory(directory, database)
+    indexed = [r for r in code_results if not r.get("skipped")]
+    skipped = [r for r in code_results if r.get("skipped")]
+
+    # Index documentation files
+    doc_results = doc_parser_mod.index_doc_directory(directory, database)
+    doc_indexed = [r for r in doc_results if not r.get("skipped")]
+    doc_skipped = [r for r in doc_results if r.get("skipped")]
+
+    # Extract docstrings from indexed code
+    docstring_results = doc_parser_mod.extract_docstrings_from_code(database)
 
     return {
         "status": "ok",
         "directory": directory,
-        "files_indexed": len(indexed),
-        "files_skipped": len(skipped),
-        "total_symbols": sum(r.get("symbols_indexed", 0) for r in indexed),
-        "total_references": sum(r.get("references_indexed", 0) for r in indexed),
-        "details": indexed,
+        "code": {
+            "files_indexed": len(indexed),
+            "files_skipped": len(skipped),
+            "total_symbols": sum(r.get("symbols_indexed", 0) for r in indexed),
+            "total_references": sum(r.get("references_indexed", 0) for r in indexed),
+        },
+        "documentation": {
+            "files_indexed": len(doc_indexed),
+            "files_skipped": len(doc_skipped),
+            "total_chunks": sum(r.get("chunks_indexed", 0) for r in doc_indexed),
+            "docstrings_extracted": len(docstring_results),
+        },
+        "details": {
+            "code": indexed,
+            "docs": doc_indexed,
+        },
     }
 
 
 # ── Tool 3: search_docs ──────────────────────────────────────────────
 @mcp.tool()
-def search_docs(query: str) -> dict:
+def search_docs(query: str, top_k: int = 10) -> dict:
     """Use this tool to understand the codebase conceptually. Ideal for
     'how does X work?', 'explain the architecture', or finding standard
-    operating procedures in the documentation."""
+    operating procedures in the documentation.
 
-    return {
-        "status": "mocked",
-        "tool": "search_docs",
-        "query": query,
-    }
+    Uses hybrid retrieval (BM25 keyword search + dense vector semantic
+    search) with Reciprocal Rank Fusion over markdown documentation,
+    README files, and docstrings extracted from code.
+
+    Args:
+        query: A natural language question about the codebase.
+        top_k: Maximum number of results to return (default 10).
+
+    Returns:
+        Dictionary with 'results' key containing matching documentation
+        chunks, each with source attribution (file, section, line numbers)
+        and relevance score.
+    """
+    database = db_mod.get_db()
+
+    try:
+        results = queries.search_documentation(query, database, top_k=top_k)
+        return {
+            "status": "ok",
+            "query": query,
+            "results": results,
+            "count": len(results),
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "query": query,
+            "error": str(e),
+            "results": [],
+        }
 
 
 # ── Tool 4: search_history ───────────────────────────────────────────

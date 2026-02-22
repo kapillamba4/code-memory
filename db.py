@@ -106,6 +106,57 @@ CREATE TABLE IF NOT EXISTS references_ (
     line_number INTEGER NOT NULL,
     UNIQUE(symbol_name, file_id, line_number)
 );
+
+-- ---------------------------------------------------------------------------
+-- Documentation tables (Milestone 4)
+-- ---------------------------------------------------------------------------
+
+-- 6. Tracked documentation files
+CREATE TABLE IF NOT EXISTS doc_files (
+    id            INTEGER PRIMARY KEY,
+    path          TEXT    UNIQUE NOT NULL,
+    last_modified REAL   NOT NULL,
+    file_hash     TEXT   NOT NULL,
+    doc_type      TEXT   NOT NULL  -- 'markdown', 'readme', 'docstring'
+);
+
+-- 7. Chunked documentation content
+CREATE TABLE IF NOT EXISTS doc_chunks (
+    id            INTEGER PRIMARY KEY,
+    doc_file_id   INTEGER NOT NULL REFERENCES doc_files(id),
+    chunk_index   INTEGER NOT NULL,
+    section_title TEXT,
+    content       TEXT    NOT NULL,
+    line_start    INTEGER NOT NULL,
+    line_end      INTEGER NOT NULL,
+    UNIQUE(doc_file_id, chunk_index)
+);
+
+-- 8. FTS5 for documentation chunks (BM25 keyword search)
+CREATE VIRTUAL TABLE IF NOT EXISTS doc_chunks_fts USING fts5(
+    content,
+    section_title,
+    content=doc_chunks,
+    content_rowid=id
+);
+
+-- Triggers to keep doc FTS5 in sync
+CREATE TRIGGER IF NOT EXISTS doc_chunks_ai AFTER INSERT ON doc_chunks BEGIN
+    INSERT INTO doc_chunks_fts(rowid, content, section_title)
+    VALUES (new.id, new.content, new.section_title);
+END;
+
+CREATE TRIGGER IF NOT EXISTS doc_chunks_ad AFTER DELETE ON doc_chunks BEGIN
+    INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, content, section_title)
+    VALUES ('delete', old.id, old.content, old.section_title);
+END;
+
+CREATE TRIGGER IF NOT EXISTS doc_chunks_au AFTER UPDATE ON doc_chunks BEGIN
+    INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, content, section_title)
+    VALUES ('delete', old.id, old.content, old.section_title);
+    INSERT INTO doc_chunks_fts(rowid, content, section_title)
+    VALUES (new.id, new.content, new.section_title);
+END;
 """
 
 
@@ -128,12 +179,23 @@ def get_db(db_path: str = "code_memory.db") -> sqlite3.Connection:
 
     db.executescript(_SCHEMA_SQL)
 
-    # sqlite-vec virtual table (must be created outside executescript)
+    # sqlite-vec virtual table for code embeddings (must be created outside executescript)
     db.execute(
         f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS symbol_embeddings
         USING vec0(
             symbol_id INTEGER PRIMARY KEY,
+            embedding float[{EMBEDDING_DIM}]
+        )
+        """
+    )
+
+    # sqlite-vec virtual table for documentation embeddings
+    db.execute(
+        f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS doc_embeddings
+        USING vec0(
+            chunk_id INTEGER PRIMARY KEY,
             embedding float[{EMBEDDING_DIM}]
         )
         """
@@ -248,5 +310,94 @@ def upsert_embedding(db: sqlite3.Connection, symbol_id: int, embedding: list[flo
     db.execute(
         "INSERT INTO symbol_embeddings (symbol_id, embedding) VALUES (?, ?)",
         (symbol_id, blob),
+    )
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Documentation upsert helpers (Milestone 4)
+# ---------------------------------------------------------------------------
+
+
+def upsert_doc_file(
+    db: sqlite3.Connection, path: str, last_modified: float, fhash: str, doc_type: str
+) -> int:
+    """Insert or update a documentation file record. Returns doc_file_id."""
+    db.execute(
+        """
+        INSERT INTO doc_files (path, last_modified, file_hash, doc_type)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(path) DO UPDATE SET
+            last_modified = excluded.last_modified,
+            file_hash     = excluded.file_hash,
+            doc_type      = excluded.doc_type
+        """,
+        (path, last_modified, fhash, doc_type),
+    )
+    db.commit()
+    row = db.execute("SELECT id FROM doc_files WHERE path = ?", (path,)).fetchone()
+    return row[0]
+
+
+def delete_doc_file_data(db: sqlite3.Connection, doc_file_id: int) -> None:
+    """Remove all chunks and embeddings for a documentation file.
+
+    This is called before re-indexing to guarantee idempotency.
+    """
+    # Collect chunk ids for embedding cleanup
+    chunk_ids = [
+        r[0]
+        for r in db.execute(
+            "SELECT id FROM doc_chunks WHERE doc_file_id = ?", (doc_file_id,)
+        ).fetchall()
+    ]
+    if chunk_ids:
+        placeholders = ",".join("?" * len(chunk_ids))
+        db.execute(f"DELETE FROM doc_embeddings WHERE chunk_id IN ({placeholders})", chunk_ids)
+
+    db.execute("DELETE FROM doc_chunks WHERE doc_file_id = ?", (doc_file_id,))
+    db.commit()
+
+
+def upsert_doc_chunk(
+    db: sqlite3.Connection,
+    doc_file_id: int,
+    chunk_index: int,
+    section_title: str | None,
+    content: str,
+    line_start: int,
+    line_end: int,
+) -> int:
+    """Insert or update a documentation chunk. Returns chunk_id."""
+    db.execute(
+        """
+        INSERT INTO doc_chunks (doc_file_id, chunk_index, section_title,
+                               content, line_start, line_end)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(doc_file_id, chunk_index) DO UPDATE SET
+            section_title = excluded.section_title,
+            content       = excluded.content,
+            line_start    = excluded.line_start,
+            line_end      = excluded.line_end
+        """,
+        (doc_file_id, chunk_index, section_title, content, line_start, line_end),
+    )
+    db.commit()
+    row = db.execute(
+        "SELECT id FROM doc_chunks WHERE doc_file_id = ? AND chunk_index = ?",
+        (doc_file_id, chunk_index),
+    ).fetchone()
+    return row[0]
+
+
+def upsert_doc_embedding(db: sqlite3.Connection, chunk_id: int, embedding: list[float]) -> None:
+    """Insert or replace a documentation chunk's dense vector embedding."""
+    import struct
+
+    blob = struct.pack(f"{len(embedding)}f", *embedding)
+    db.execute("DELETE FROM doc_embeddings WHERE chunk_id = ?", (chunk_id,))
+    db.execute(
+        "INSERT INTO doc_embeddings (chunk_id, embedding) VALUES (?, ?)",
+        (chunk_id, blob),
     )
     db.commit()

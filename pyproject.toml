@@ -5,6 +5,7 @@ description = "Add your description here"
 requires-python = ">=3.13"
 dependencies = [
     "gitpython>=3.1.46",
+    "markdown-it-py>=4.0.0",
     "mcp[cli]>=1.26.0",
     "sentence-transformers>=5.2.3",
     "sqlite-vec>=0.1.6",

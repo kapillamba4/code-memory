@@ -140,19 +140,27 @@ search_history(query="jane.doe", target_file="src/auth/login.py")
 ```
 code-memory/
 ├── server.py          # MCP server entry point (FastMCP)
+├── db.py              # SQLite database layer with sqlite-vec
+├── parser.py          # Tree-sitter-based code parser
+├── doc_parser.py      # Markdown documentation parser
+├── queries.py         # Hybrid retrieval query layer
+├── git_search.py      # Git history search module
 ├── pyproject.toml     # Project metadata & dependencies
 ├── Makefile           # Dev workflow shortcuts
 └── prompts/           # Milestone prompt engineering files
     ├── milestone_1.xml
-    └── milestone_2.xml
+    ├── milestone_2.xml
+    ├── milestone_3.xml
+    ├── milestone_4.xml
+    └── milestone_5.xml
 ```
 
 ## Roadmap
 
 - [x] **Milestone 1** — Project scaffolding & MCP protocol wiring
 - [x] **Milestone 2** — Implement `search_code` with AST parsing + SQLite + `sqlite-vec`
-- [ ] **Milestone 3** — Implement `search_history` with Git integration
-- [ ] **Milestone 4** — Implement `search_docs` with semantic search
+- [x] **Milestone 3** — Implement `search_history` with Git integration
+- [x] **Milestone 4** — Implement `search_docs` with semantic search
 - [ ] **Milestone 5** — Production hardening & packaging
 
 ## License
