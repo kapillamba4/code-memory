@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _model = None
-EMBEDDING_DIM = 384  # all-MiniLM-L6-v2
+EMBEDDING_DIM = 1024  # jina-code-embeddings-0.5b (Matryoshka truncated)
 
 
 def get_embedding_model():
@@ -38,18 +38,31 @@ def get_embedding_model():
     if _model is None:
         from sentence_transformers import SentenceTransformer
 
-        _model = SentenceTransformer("all-MiniLM-L6-v2")
+        _model = SentenceTransformer(
+            "jinaai/jina-code-embeddings-0.5b", trust_remote_code=True
+        )
     return _model
 
 
-def embed_text(text: str) -> list[float]:
-    """Generate a 384-dim dense vector embedding for *text*."""
+def embed_text(text: str, task_type: str = "nl2code") -> list[float]:
+    """Generate a dense vector embedding for *text*.
+
+    Uses jina-code-embeddings with task prefix for better code retrieval.
+    Matryoshka embedding truncated to 1024 dims for efficiency.
+
+    Args:
+        text: The text to embed.
+        task_type: One of 'nl2code', 'code2code', 'code2nl', 'code2completion', 'qa'.
+    """
     model = get_embedding_model()
-    vec = model.encode(text, normalize_embeddings=True, show_progress_bar=False)
-    return vec.tolist()
+    prefixed_text = f"{task_type}: {text}"
+    vec = model.encode(prefixed_text, normalize_embeddings=True, show_progress_bar=False)
+    return vec.tolist()[:EMBEDDING_DIM]
 
 
-def embed_texts_batch(texts: list[str], batch_size: int = 32) -> list[list[float]]:
+def embed_texts_batch(
+    texts: list[str], batch_size: int = 32, task_type: str = "nl2code"
+) -> list[list[float]]:
     """Generate embeddings for multiple texts at once.
 
     This is significantly faster than calling embed_text() in a loop
@@ -58,6 +71,7 @@ def embed_texts_batch(texts: list[str], batch_size: int = 32) -> list[list[float
     Args:
         texts: List of text strings to embed.
         batch_size: Number of texts to process per batch (default 32).
+        task_type: One of 'nl2code', 'code2code', 'code2nl', 'code2completion', 'qa'.
 
     Returns:
         List of embedding vectors (same order as input texts).
@@ -67,16 +81,19 @@ def embed_texts_batch(texts: list[str], batch_size: int = 32) -> list[list[float
 
     model = get_embedding_model()
 
-    # Batch encode with normalization (same as single-text version)
+    # Add task prefix to all texts
+    prefixed_texts = [f"{task_type}: {text}" for text in texts]
+
+    # Batch encode with normalization
     vectors = model.encode(
-        texts,
+        prefixed_texts,
         batch_size=batch_size,
         normalize_embeddings=True,
         show_progress_bar=False,
         convert_to_numpy=True,
     )
 
-    return [v.tolist() for v in vectors]
+    return [v.tolist()[:EMBEDDING_DIM] for v in vectors]
 
 
 def warmup_embedding_model() -> None:
@@ -87,7 +104,7 @@ def warmup_embedding_model() -> None:
     """
     model = get_embedding_model()
     # Warmup encode to initialize lazy-loaded components
-    model.encode("warmup", normalize_embeddings=True, show_progress_bar=False)
+    model.encode("nl2code: warmup", normalize_embeddings=True, show_progress_bar=False)
     logger.info("Embedding model warmed up")
 
 
