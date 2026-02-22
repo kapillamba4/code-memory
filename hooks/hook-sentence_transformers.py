@@ -4,7 +4,7 @@ PyInstaller hook for sentence-transformers.
 Ensures all necessary model loading components are included.
 """
 
-from PyInstaller.utils.hooks import collect_submodules, copy_metadata, collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 # Collect all submodules
 hiddenimports = collect_submodules('sentence_transformers')
