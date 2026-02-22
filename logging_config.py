@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
+from contextlib import contextmanager
 from datetime import datetime
 from typing import TextIO
 
@@ -22,6 +24,27 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # Track if logging has been initialized
 _initialized = False
+
+
+@contextmanager
+def log_timing(operation_name: str, logger: logging.Logger):
+    """Context manager to log operation timing.
+
+    Args:
+        operation_name: Name of the operation being timed.
+        logger: Logger instance to use for logging.
+
+    Example:
+        with log_timing("Indexing myfile.py", logger):
+            # ... indexing code ...
+    """
+    start = time.perf_counter()
+    logger.debug(f"{operation_name} started")
+    try:
+        yield
+    finally:
+        elapsed = time.perf_counter() - start
+        logger.info(f"{operation_name} completed in {elapsed:.2f}s")
 
 
 def setup_logging(level: str = LOG_LEVEL, stream: TextIO = sys.stderr) -> logging.Logger:

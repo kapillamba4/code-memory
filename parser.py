@@ -241,6 +241,8 @@ def _extract_references(tree_root: Node, source: bytes) -> list[dict[str, Any]]:
 def index_file(filepath: str, db) -> dict:
     """Parse a single source file and index its symbols + references.
 
+    Optimized version using batch embeddings and transaction-based writes.
+
     Uses tree-sitter when a grammar is available for the file's language.
     Falls back to indexing the whole file as a single symbol otherwise.
     Skips the file if its ``last_modified`` timestamp has not changed.
@@ -270,7 +272,7 @@ def index_file(filepath: str, db) -> dict:
     source_bytes = Path(filepath).read_bytes()
     source_text = source_bytes.decode("utf-8", errors="replace")
 
-    fhash = db_mod.file_hash(filepath)
+    fhash = db_mod.file_hash(filepath)  # Now uses xxHash
     file_id = db_mod.upsert_file(db, filepath, mtime, fhash)
 
     # Delete stale data before re-inserting
@@ -286,52 +288,63 @@ def index_file(filepath: str, db) -> dict:
         parser = Parser(lang)
         tree = parser.parse(source_bytes)
 
-        # Extract and store symbols
+        # Extract symbols
         raw_symbols = _extract_symbols(tree.root_node, source_bytes)
 
-        # Flatten: process top-level symbols and nested children
-        def _store_symbols(sym_list, parent_id=None):
-            nonlocal symbols_indexed
+        # === BATCH PROCESSING ===
+        # Collect all symbols (including nested) for batch embedding
+        all_symbols: list[tuple[dict, int | None]] = []  # (sym, parent_id)
+        all_embed_inputs: list[str] = []
+
+        def _collect_for_batch(sym_list, parent_id=None):
             for sym in sym_list:
-                sym_id = db_mod.upsert_symbol(
-                    db, sym["name"], sym["kind"], file_id,
-                    sym["line_start"], sym["line_end"],
-                    parent_id, sym["source_text"],
-                )
-                symbols_indexed += 1
-
-                # Generate embedding
+                all_symbols.append((sym, parent_id))
                 embed_input = f"{sym['kind']} {sym['name']}: {sym['source_text'][:1000]}"
-                vec = db_mod.embed_text(embed_input)
-                db_mod.upsert_embedding(db, sym_id, vec)
-
-                # Recurse into children
+                all_embed_inputs.append(embed_input)
                 if sym.get("children"):
-                    _store_symbols(sym["children"], parent_id=sym_id)
+                    _collect_for_batch(sym["children"], parent_id=None)
 
-        _store_symbols(raw_symbols)
+        _collect_for_batch(raw_symbols)
 
-        # Extract and store references
+        # Batch embed all at once
+        if all_embed_inputs:
+            embeddings = db_mod.embed_texts_batch(all_embed_inputs, batch_size=64)
+
+            # Store all in single transaction
+            with db_mod.transaction(db):
+                for i, (sym, parent_id) in enumerate(all_symbols):
+                    sym_id = db_mod.upsert_symbol(
+                        db, sym["name"], sym["kind"], file_id,
+                        sym["line_start"], sym["line_end"],
+                        parent_id, sym["source_text"],
+                        auto_commit=False
+                    )
+                    db_mod.upsert_embedding(db, sym_id, embeddings[i], auto_commit=False)
+                    symbols_indexed += 1
+
+        # Extract and store references (also batched)
         refs = _extract_references(tree.root_node, source_bytes)
-        for ref in refs:
-            db_mod.upsert_reference(db, ref["name"], file_id, ref["line"])
-            references_indexed += 1
+        if refs:
+            with db_mod.transaction(db):
+                for ref in refs:
+                    db_mod.upsert_reference(db, ref["name"], file_id, ref["line"], auto_commit=False)
+                    references_indexed += 1
 
     else:
         # ── Fallback: index entire file as one symbol ─────────────────
         basename = os.path.basename(filepath)
-        sym_id = db_mod.upsert_symbol(
-            db, basename, "file", file_id,
-            1, source_text.count("\n") + 1,
-            None, source_text[:5000],
-        )
-        symbols_indexed += 1
+        embeddings = db_mod.embed_texts_batch([f"file {basename}: {source_text[:1000]}"])
 
-        embed_input = f"file {basename}: {source_text[:1000]}"
-        vec = db_mod.embed_text(embed_input)
-        db_mod.upsert_embedding(db, sym_id, vec)
+        with db_mod.transaction(db):
+            sym_id = db_mod.upsert_symbol(
+                db, basename, "file", file_id,
+                1, source_text.count("\n") + 1,
+                None, source_text[:5000],
+                auto_commit=False
+            )
+            db_mod.upsert_embedding(db, sym_id, embeddings[0], auto_commit=False)
+            symbols_indexed += 1
 
-    db.commit()
     return {
         "file": filepath,
         "symbols_indexed": symbols_indexed,
@@ -357,8 +370,11 @@ def index_directory(dirpath: str, db) -> list[dict]:
     Returns:
         A list of per-file result dicts (see :func:`index_file`).
     """
+    import time
+
     results: list[dict] = []
     dirpath = os.path.abspath(dirpath)
+    total_start = time.perf_counter()
 
     for root, dirs, files in os.walk(dirpath, topdown=True):
         # Prune skipped directories in-place
@@ -385,4 +401,17 @@ def index_directory(dirpath: str, db) -> list[dict]:
                     "skipped": True,
                     "error": True,
                 })
+
+    # Log performance summary
+    total_elapsed = time.perf_counter() - total_start
+    total_symbols = sum(r.get("symbols_indexed", 0) for r in results)
+    total_refs = sum(r.get("references_indexed", 0) for r in results)
+    files_indexed = sum(1 for r in results if not r.get("skipped"))
+    files_skipped = sum(1 for r in results if r.get("skipped") and not r.get("error"))
+
+    logger.info(
+        "Indexed %d files (%d skipped) in %.2fs - %d symbols, %d references",
+        files_indexed, files_skipped, total_elapsed, total_symbols, total_refs
+    )
+
     return results

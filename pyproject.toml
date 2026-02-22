@@ -37,6 +37,7 @@ dependencies = [
     "tree-sitter-ruby>=0.23.1",
     "tree-sitter-rust>=0.24.0",
     "tree-sitter-typescript>=0.23.2",
+    "xxhash>=3.6.0",
 ]
 
 [project.optional-dependencies]

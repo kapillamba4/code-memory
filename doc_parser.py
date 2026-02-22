@@ -237,7 +237,7 @@ def index_doc_file(
     overlap: int = DEFAULT_OVERLAP,
     min_chunk_size: int = DEFAULT_MIN_CHUNK_SIZE,
 ) -> dict:
-    """Index a documentation file.
+    """Index a documentation file with batch embeddings and transaction.
 
     Args:
         filepath: Path to the documentation file.
@@ -257,7 +257,7 @@ def index_doc_file(
     # Check if file has changed
     stat = os.stat(abs_path)
     last_modified = stat.st_mtime
-    fhash = db_mod.file_hash(abs_path)
+    fhash = db_mod.file_hash(abs_path)  # Now uses xxHash
 
     existing = db.execute(
         "SELECT id, file_hash FROM doc_files WHERE path = ?", (abs_path,)
@@ -283,8 +283,9 @@ def index_doc_file(
     # Parse and chunk
     sections = parse_markdown_sections(abs_path)
 
-    chunks_indexed = 0
-    chunk_index = 0
+    # === BATCH PROCESSING ===
+    chunks_to_store: list[dict] = []
+    embed_inputs: list[str] = []
 
     for section in sections:
         content = section["content"]
@@ -298,22 +299,34 @@ def index_doc_file(
             if len(sub_content) < min_chunk_size:
                 continue
 
-            chunk_id = db_mod.upsert_doc_chunk(
-                db,
-                doc_file_id,
-                chunk_index,
-                section["section_title"],
-                sub_content,
-                section["line_start"],
-                section["line_end"],
-            )
+            chunks_to_store.append({
+                "section_title": section["section_title"],
+                "content": sub_content,
+                "line_start": section["line_start"],
+                "line_end": section["line_end"],
+            })
+            embed_input = f"{section['section_title'] or ''}: {sub_content}"
+            embed_inputs.append(embed_input)
 
-            # Generate and store embedding
-            embedding = db_mod.embed_text(f"{section['section_title'] or ''}: {sub_content}")
-            db_mod.upsert_doc_embedding(db, chunk_id, embedding)
+    # Batch embed all chunks
+    chunks_indexed = 0
+    if embed_inputs:
+        embeddings = db_mod.embed_texts_batch(embed_inputs, batch_size=64)
 
-            chunk_index += 1
-            chunks_indexed += 1
+        with db_mod.transaction(db):
+            for i, chunk in enumerate(chunks_to_store):
+                chunk_id = db_mod.upsert_doc_chunk(
+                    db,
+                    doc_file_id,
+                    i,  # chunk_index
+                    chunk["section_title"],
+                    chunk["content"],
+                    chunk["line_start"],
+                    chunk["line_end"],
+                    auto_commit=False,
+                )
+                db_mod.upsert_doc_embedding(db, chunk_id, embeddings[i], auto_commit=False)
+                chunks_indexed += 1
 
     return {
         "file": filepath,
@@ -354,8 +367,7 @@ def index_doc_directory(dirpath: str, db) -> list[dict]:
 def extract_docstrings_from_code(db) -> list[dict]:
     """Extract docstrings from already-indexed code symbols.
 
-    This function queries the existing symbols table and extracts
-    docstrings from the source_text field.
+    Uses batch embedding generation for better performance.
 
     Args:
         db: Database connection.
@@ -374,6 +386,10 @@ def extract_docstrings_from_code(db) -> list[dict]:
         WHERE s.kind IN ('function', 'class', 'method')
         """
     ).fetchall()
+
+    # === BATCH PROCESSING ===
+    docstrings_to_store: list[dict] = []
+    embed_inputs: list[str] = []
 
     for row in rows:
         symbol_id, name, kind, file_path, line_start, line_end, source_text = row
@@ -396,50 +412,68 @@ def extract_docstrings_from_code(db) -> list[dict]:
         if existing:
             continue
 
-        # Create a doc_file entry for the code file if needed
-        doc_file = db.execute(
-            "SELECT id FROM doc_files WHERE path = ?", (file_path,)
-        ).fetchone()
-
-        if not doc_file:
-            # Get file stats
-            stat = os.stat(file_path) if os.path.exists(file_path) else None
-            doc_file_id = db_mod.upsert_doc_file(
-                db,
-                file_path,
-                stat.st_mtime if stat else 0,
-                db_mod.file_hash(file_path) if stat else "",
-                "docstring",
-            )
-        else:
-            doc_file_id = doc_file[0]
-
-        # Get next chunk index
-        max_idx = db.execute(
-            "SELECT COALESCE(MAX(chunk_index), -1) FROM doc_chunks WHERE doc_file_id = ?",
-            (doc_file_id,),
-        ).fetchone()[0]
-
-        chunk_id = db_mod.upsert_doc_chunk(
-            db,
-            doc_file_id,
-            max_idx + 1,
-            name,  # Use symbol name as section title
-            docstring,
-            line_start,
-            line_end,
-        )
-
-        # Generate and store embedding
-        embedding = db_mod.embed_text(f"{kind} {name}: {docstring}")
-        db_mod.upsert_doc_embedding(db, chunk_id, embedding)
-
-        results.append({
-            "symbol": name,
+        docstrings_to_store.append({
+            "name": name,
             "kind": kind,
-            "file": file_path,
-            "docstring_length": len(docstring),
+            "file_path": file_path,
+            "line_start": line_start,
+            "line_end": line_end,
+            "docstring": docstring,
         })
+        embed_inputs.append(f"{kind} {name}: {docstring}")
+
+    # Batch embed all docstrings
+    if embed_inputs:
+        embeddings = db_mod.embed_texts_batch(embed_inputs, batch_size=64)
+
+        with db_mod.transaction(db):
+            for i, doc_info in enumerate(docstrings_to_store):
+                file_path = doc_info["file_path"]
+
+                # Create a doc_file entry for the code file if needed
+                doc_file = db.execute(
+                    "SELECT id FROM doc_files WHERE path = ?", (file_path,)
+                ).fetchone()
+
+                if not doc_file:
+                    # Get file stats
+                    stat = os.stat(file_path) if os.path.exists(file_path) else None
+                    doc_file_id = db_mod.upsert_doc_file(
+                        db,
+                        file_path,
+                        stat.st_mtime if stat else 0,
+                        db_mod.file_hash(file_path) if stat else "",
+                        "docstring",
+                        auto_commit=False,
+                    )
+                else:
+                    doc_file_id = doc_file[0]
+
+                # Get next chunk index
+                max_idx = db.execute(
+                    "SELECT COALESCE(MAX(chunk_index), -1) FROM doc_chunks WHERE doc_file_id = ?",
+                    (doc_file_id,),
+                ).fetchone()[0]
+
+                chunk_id = db_mod.upsert_doc_chunk(
+                    db,
+                    doc_file_id,
+                    max_idx + 1,
+                    doc_info["name"],  # Use symbol name as section title
+                    doc_info["docstring"],
+                    doc_info["line_start"],
+                    doc_info["line_end"],
+                    auto_commit=False,
+                )
+
+                db_mod.upsert_doc_embedding(db, chunk_id, embeddings[i], auto_commit=False)
+
+                results.append({
+                    "symbol": doc_info["name"],
+                    "kind": doc_info["kind"],
+                    "file": file_path,
+                    "docstring_length": len(doc_info["docstring"]),
+                })
 
     return results
 

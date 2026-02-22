@@ -11,14 +11,18 @@ All writes use upsert semantics so re-indexing is idempotent.
 
 from __future__ import annotations
 
-import hashlib
+import logging
 import sqlite3
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import sqlite_vec
+import xxhash
 
 if TYPE_CHECKING:
     pass
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Embedding model (lazy-loaded singleton)
@@ -41,8 +45,78 @@ def get_embedding_model():
 def embed_text(text: str) -> list[float]:
     """Generate a 384-dim dense vector embedding for *text*."""
     model = get_embedding_model()
-    vec = model.encode(text, normalize_embeddings=True)
+    vec = model.encode(text, normalize_embeddings=True, show_progress_bar=False)
     return vec.tolist()
+
+
+def embed_texts_batch(texts: list[str], batch_size: int = 32) -> list[list[float]]:
+    """Generate embeddings for multiple texts at once.
+
+    This is significantly faster than calling embed_text() in a loop
+    because sentence-transformers is optimized for batch processing.
+
+    Args:
+        texts: List of text strings to embed.
+        batch_size: Number of texts to process per batch (default 32).
+
+    Returns:
+        List of embedding vectors (same order as input texts).
+    """
+    if not texts:
+        return []
+
+    model = get_embedding_model()
+
+    # Batch encode with normalization (same as single-text version)
+    vectors = model.encode(
+        texts,
+        batch_size=batch_size,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+        convert_to_numpy=True,
+    )
+
+    return [v.tolist() for v in vectors]
+
+
+def warmup_embedding_model() -> None:
+    """Pre-load and warm up the embedding model.
+
+    Call this at server startup to avoid cold-start latency on first search.
+    The warmup encodes a dummy string to initialize internal tensors.
+    """
+    model = get_embedding_model()
+    # Warmup encode to initialize lazy-loaded components
+    model.encode("warmup", normalize_embeddings=True, show_progress_bar=False)
+    logger.info("Embedding model warmed up")
+
+
+# ---------------------------------------------------------------------------
+# Transaction support
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def transaction(db: sqlite3.Connection):
+    """Context manager for explicit transaction control.
+
+    Disables autocommit, yields control, then commits on success.
+    On exception, rolls back automatically.
+
+    Example:
+        with transaction(db):
+            for item in items:
+                upsert_symbol(db, ..., auto_commit=False)
+        # Single commit here
+    """
+    # Disable autocommit by starting a transaction
+    db.execute("BEGIN")
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -209,15 +283,32 @@ def get_db(db_path: str = "code_memory.db") -> sqlite3.Connection:
 
 
 def file_hash(filepath: str) -> str:
-    """Compute SHA-256 hex digest of a file's contents."""
-    h = hashlib.sha256()
+    """Compute fast non-cryptographic hash of a file's contents.
+
+    Uses xxHash (xxh64) which is ~10x faster than SHA-256 while still
+    providing excellent collision resistance for change detection.
+
+    Args:
+        filepath: Path to the file to hash.
+
+    Returns:
+        Hexadecimal string representation of the 64-bit hash.
+    """
+    h = xxhash.xxh64()
     with open(filepath, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
+        # Read in 64KB chunks for memory efficiency
+        for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
 
 
-def upsert_file(db: sqlite3.Connection, path: str, last_modified: float, fhash: str) -> int:
+def upsert_file(
+    db: sqlite3.Connection,
+    path: str,
+    last_modified: float,
+    fhash: str,
+    auto_commit: bool = True,
+) -> int:
     """Insert or update a file record. Returns the file_id."""
     db.execute(
         """
@@ -229,13 +320,14 @@ def upsert_file(db: sqlite3.Connection, path: str, last_modified: float, fhash: 
         """,
         (path, last_modified, fhash),
     )
-    db.commit()
+    if auto_commit:
+        db.commit()
     # Fetch the id (needed because last_insert_rowid isn't reliable on update)
     row = db.execute("SELECT id FROM files WHERE path = ?", (path,)).fetchone()
     return row[0]
 
 
-def delete_file_data(db: sqlite3.Connection, file_id: int) -> None:
+def delete_file_data(db: sqlite3.Connection, file_id: int, auto_commit: bool = True) -> None:
     """Remove all symbols, embeddings, and references for a file.
 
     This is called before re-indexing to guarantee idempotency.
@@ -250,7 +342,8 @@ def delete_file_data(db: sqlite3.Connection, file_id: int) -> None:
 
     db.execute("DELETE FROM symbols WHERE file_id = ?", (file_id,))
     db.execute("DELETE FROM references_ WHERE file_id = ?", (file_id,))
-    db.commit()
+    if auto_commit:
+        db.commit()
 
 
 def upsert_symbol(
@@ -262,6 +355,7 @@ def upsert_symbol(
     line_end: int,
     parent_symbol_id: int | None,
     source_text: str,
+    auto_commit: bool = True,
 ) -> int:
     """Insert or update a symbol record. Returns the symbol_id."""
     db.execute(
@@ -276,7 +370,8 @@ def upsert_symbol(
         """,
         (name, kind, file_id, line_start, line_end, parent_symbol_id, source_text),
     )
-    db.commit()
+    if auto_commit:
+        db.commit()
     row = db.execute(
         "SELECT id FROM symbols WHERE file_id = ? AND name = ? AND kind = ? AND line_start = ?",
         (file_id, name, kind, line_start),
@@ -285,7 +380,11 @@ def upsert_symbol(
 
 
 def upsert_reference(
-    db: sqlite3.Connection, symbol_name: str, file_id: int, line_number: int
+    db: sqlite3.Connection,
+    symbol_name: str,
+    file_id: int,
+    line_number: int,
+    auto_commit: bool = True,
 ) -> None:
     """Insert or update a cross-reference record."""
     db.execute(
@@ -296,10 +395,16 @@ def upsert_reference(
         """,
         (symbol_name, file_id, line_number),
     )
-    db.commit()
+    if auto_commit:
+        db.commit()
 
 
-def upsert_embedding(db: sqlite3.Connection, symbol_id: int, embedding: list[float]) -> None:
+def upsert_embedding(
+    db: sqlite3.Connection,
+    symbol_id: int,
+    embedding: list[float],
+    auto_commit: bool = True,
+) -> None:
     """Insert or replace a symbol's dense vector embedding."""
     import struct
 
@@ -310,7 +415,8 @@ def upsert_embedding(db: sqlite3.Connection, symbol_id: int, embedding: list[flo
         "INSERT INTO symbol_embeddings (symbol_id, embedding) VALUES (?, ?)",
         (symbol_id, blob),
     )
-    db.commit()
+    if auto_commit:
+        db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +425,12 @@ def upsert_embedding(db: sqlite3.Connection, symbol_id: int, embedding: list[flo
 
 
 def upsert_doc_file(
-    db: sqlite3.Connection, path: str, last_modified: float, fhash: str, doc_type: str
+    db: sqlite3.Connection,
+    path: str,
+    last_modified: float,
+    fhash: str,
+    doc_type: str,
+    auto_commit: bool = True,
 ) -> int:
     """Insert or update a documentation file record. Returns doc_file_id."""
     db.execute(
@@ -333,12 +444,13 @@ def upsert_doc_file(
         """,
         (path, last_modified, fhash, doc_type),
     )
-    db.commit()
+    if auto_commit:
+        db.commit()
     row = db.execute("SELECT id FROM doc_files WHERE path = ?", (path,)).fetchone()
     return row[0]
 
 
-def delete_doc_file_data(db: sqlite3.Connection, doc_file_id: int) -> None:
+def delete_doc_file_data(db: sqlite3.Connection, doc_file_id: int, auto_commit: bool = True) -> None:
     """Remove all chunks and embeddings for a documentation file.
 
     This is called before re-indexing to guarantee idempotency.
@@ -355,7 +467,8 @@ def delete_doc_file_data(db: sqlite3.Connection, doc_file_id: int) -> None:
         db.execute(f"DELETE FROM doc_embeddings WHERE chunk_id IN ({placeholders})", chunk_ids)
 
     db.execute("DELETE FROM doc_chunks WHERE doc_file_id = ?", (doc_file_id,))
-    db.commit()
+    if auto_commit:
+        db.commit()
 
 
 def upsert_doc_chunk(
@@ -366,6 +479,7 @@ def upsert_doc_chunk(
     content: str,
     line_start: int,
     line_end: int,
+    auto_commit: bool = True,
 ) -> int:
     """Insert or update a documentation chunk. Returns chunk_id."""
     db.execute(
@@ -381,7 +495,8 @@ def upsert_doc_chunk(
         """,
         (doc_file_id, chunk_index, section_title, content, line_start, line_end),
     )
-    db.commit()
+    if auto_commit:
+        db.commit()
     row = db.execute(
         "SELECT id FROM doc_chunks WHERE doc_file_id = ? AND chunk_index = ?",
         (doc_file_id, chunk_index),
@@ -389,7 +504,12 @@ def upsert_doc_chunk(
     return row[0]
 
 
-def upsert_doc_embedding(db: sqlite3.Connection, chunk_id: int, embedding: list[float]) -> None:
+def upsert_doc_embedding(
+    db: sqlite3.Connection,
+    chunk_id: int,
+    embedding: list[float],
+    auto_commit: bool = True,
+) -> None:
     """Insert or replace a documentation chunk's dense vector embedding."""
     import struct
 
@@ -399,4 +519,5 @@ def upsert_doc_embedding(db: sqlite3.Connection, chunk_id: int, embedding: list[
         "INSERT INTO doc_embeddings (chunk_id, embedding) VALUES (?, ?)",
         (chunk_id, blob),
     )
-    db.commit()
+    if auto_commit:
+        db.commit()
