@@ -17,18 +17,23 @@ Instead of a single monolithic search, `code-memory` routes queries through **th
 
 This forces the LLM to pick the *right retrieval strategy* before any data is fetched.
 
-## Quickstart
+## Installation
 
-### Prerequisites
+### From PyPI (Recommended)
 
-- Python ≥ 3.13
-- [`uv`](https://docs.astral.sh/uv/) package manager
+```bash
+# Install with pip
+pip install code-memory
 
-### Install & Run
+# Or with uvx (for MCP hosts)
+uvx code-memory
+```
+
+### From Source
 
 ```bash
 # Clone the repo
-git clone https://github.com/YOUR_USERNAME/code-memory.git
+git clone https://github.com/kapillamba4/code-memory.git
 cd code-memory
 
 # Install dependencies
@@ -38,17 +43,38 @@ uv sync
 uv run mcp run server.py
 ```
 
+## Quickstart
+
+### Prerequisites
+
+- Python ≥ 3.13
+- [`uv`](https://docs.astral.sh/uv/) package manager (recommended) or pip
+
+### Install & Run
+
+```bash
+# Install from PyPI
+pip install code-memory
+
+# Or run directly with uvx
+uvx code-memory
+```
+
 ### Development
 
 ```bash
 # Run with the MCP Inspector for interactive debugging
 uv run mcp dev server.py
 
-# Format / Lint
-make lint
-
 # Run tests
-make test
+uv run pytest tests/ -v
+
+# Lint and format
+uv run ruff check .
+uv run ruff format .
+
+# Build package
+uv build
 ```
 
 ## Configure Your MCP Host
@@ -98,11 +124,24 @@ Add to `.vscode/mcp.json` in your workspace:
 }
 ```
 
+## Configuration
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CODE_MEMORY_LOG_LEVEL` | Logging verbosity (DEBUG, INFO, WARNING, ERROR) | INFO |
+
+Example:
+```bash
+CODE_MEMORY_LOG_LEVEL=DEBUG uvx code-memory
+```
+
 ## Tools
 
 ### `index_codebase`
 
-Indexes or re-indexes Python source files in the given directory. Run this before using `search_code` to ensure the database is up to date. Uses Python's `ast` module for structural extraction and generates dense vector embeddings using `sentence-transformers` (runs locally, in-process) for semantic search. All data is stored locally using `sqlite-vec`.
+Indexes or re-indexes source files and documentation in the given directory. Run this before using `search_code` or `search_docs` to ensure the database is up to date. Uses tree-sitter for language-agnostic structural extraction and generates dense vector embeddings using `sentence-transformers` (runs locally, in-process) for semantic search.
 
 ```
 index_codebase(directory=".")
@@ -120,10 +159,11 @@ search_code(query="src/auth/", search_type="file_structure")
 
 ### `search_docs`
 
-Understand the codebase conceptually — how things work, architectural patterns, SOPs.
+Understand the codebase conceptually — how things work, architectural patterns, SOPs. Searches markdown documentation, READMEs, and docstrings extracted from code.
 
 ```
 search_docs(query="how does the authentication flow work?")
+search_docs(query="installation instructions", top_k=5)
 ```
 
 ### `search_history`
@@ -131,8 +171,9 @@ search_docs(query="how does the authentication flow work?")
 Debug regressions and understand developer intent through Git history.
 
 ```
-search_history(query="fix login timeout")
-search_history(query="jane.doe", target_file="src/auth/login.py")
+search_history(query="fix login timeout", search_type="commits")
+search_history(query="src/auth/login.py", search_type="file_history", target_file="src/auth/login.py")
+search_history(query="server.py", search_type="blame", target_file="server.py", line_start=1, line_end=20)
 ```
 
 ## Project Structure
@@ -145,15 +186,31 @@ code-memory/
 ├── doc_parser.py      # Markdown documentation parser
 ├── queries.py         # Hybrid retrieval query layer
 ├── git_search.py      # Git history search module
+├── errors.py          # Custom exception hierarchy
+├── validation.py      # Input validation functions
+├── logging_config.py  # Structured logging configuration
+├── tests/             # Test suite
 ├── pyproject.toml     # Project metadata & dependencies
-├── Makefile           # Dev workflow shortcuts
 └── prompts/           # Milestone prompt engineering files
-    ├── milestone_1.xml
-    ├── milestone_2.xml
-    ├── milestone_3.xml
-    ├── milestone_4.xml
-    └── milestone_5.xml
 ```
+
+## Troubleshooting
+
+### "Git repository not found" error
+
+Make sure you're running `search_history` from within a git repository. The tool searches upward from the current directory to find `.git`.
+
+### Empty search results
+
+Run `index_codebase(directory=".")` first to index your code and documentation. The index is stored locally in `code_memory.db`.
+
+### Slow indexing
+
+Indexing generates embeddings using a local sentence-transformers model. The first run downloads the model (~90MB). Subsequent runs are faster.
+
+### Embedding model errors
+
+Ensure you have enough disk space and memory. The `all-MiniLM-L6-v2` model requires ~500MB RAM when loaded.
 
 ## Roadmap
 
@@ -161,7 +218,15 @@ code-memory/
 - [x] **Milestone 2** — Implement `search_code` with AST parsing + SQLite + `sqlite-vec`
 - [x] **Milestone 3** — Implement `search_history` with Git integration
 - [x] **Milestone 4** — Implement `search_docs` with semantic search
-- [ ] **Milestone 5** — Production hardening & packaging
+- [x] **Milestone 5** — Production hardening & packaging
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## License
 
