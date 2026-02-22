@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-memory"
-version = "0.1.0"
+version = "1.0.2"
 description = "A deterministic, high-precision code intelligence MCP server"
 readme = "README.md"
 license = "MIT"
