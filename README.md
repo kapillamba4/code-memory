@@ -4,6 +4,43 @@ A deterministic, high-precision **code intelligence layer** exposed as a [Model 
 
 `code-memory` gives your AI coding assistant structured access to your codebase through three focused pathways — eliminating context-window bloat and vague "search everything" queries.
 
+## Supported Languages
+
+### Full AST Support (Tree-sitter)
+
+These languages have structural parsing with symbol extraction (functions, classes, methods, etc.):
+
+| Language | Extensions |
+|----------|------------|
+| Python | `.py` |
+| JavaScript | `.js`, `.jsx` |
+| TypeScript | `.ts`, `.tsx` |
+| Java | `.java` |
+| Go | `.go` |
+| Rust | `.rs` |
+| C | `.c`, `.h` |
+| C++ | `.cpp`, `.hpp`, `.cc`, `.cxx` |
+| Ruby | `.rb` |
+| Kotlin | `.kt`, `.kts` |
+
+### Fallback Support (Whole-file Indexing)
+
+These file types are indexed as complete units for BM25 and semantic search:
+
+| Category | Extensions |
+|----------|------------|
+| C# | `.cs` |
+| Swift | `.swift` |
+| Scala | `.scala` |
+| Lua | `.lua` |
+| Shell | `.sh`, `.bash`, `.zsh` |
+| Config | `.yaml`, `.yml`, `.toml`, `.json` |
+| Web | `.html`, `.css`, `.scss` |
+| Database | `.sql` |
+| Docs | `.md`, `.txt` |
+
+> **Note:** Files and directories matching patterns in your `.gitignore` are automatically skipped during indexing. This excludes build artifacts, dependencies, and other generated files.
+
 ## Architecture: Progressive Disclosure
 
 Instead of a single monolithic search, `code-memory` routes queries through **three purpose-built tools**:

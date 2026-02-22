@@ -14,18 +14,55 @@ import os
 from pathlib import Path
 from typing import Any
 
+import pathspec
 from tree_sitter import Language, Node, Parser
 
 import db as db_mod
 
 logger = logging.getLogger(__name__)
 
-# ── Directories to skip ───────────────────────────────────────────────
+# ── Directories to always skip (even without .gitignore) ───────────────
 _SKIP_DIRS = frozenset({
     ".venv", "venv", "__pycache__", ".git", "node_modules",
     ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox",
     "dist", "build", "target", "bin", "obj",
 })
+
+
+def _load_gitignore_spec(root_dir: str) -> pathspec.PathSpec | None:
+    """Load .gitignore patterns from the given directory.
+
+    Returns a PathSpec object if .gitignore exists, None otherwise.
+    """
+    gitignore_path = os.path.join(root_dir, ".gitignore")
+    if not os.path.isfile(gitignore_path):
+        return None
+
+    try:
+        with open(gitignore_path, encoding="utf-8") as f:
+            lines = f.readlines()
+        return pathspec.PathSpec.from_lines("gitwildmatch", lines)
+    except (OSError, UnicodeDecodeError) as e:
+        logger.debug("Failed to read .gitignore: %s", e)
+        return None
+
+
+def _should_skip_path(
+    rel_path: str,
+    is_dir: bool,
+    gitignore_spec: pathspec.PathSpec | None,
+) -> bool:
+    """Check if a path should be skipped based on .gitignore patterns."""
+    if gitignore_spec is None:
+        return False
+
+    # Check both the path as-is and with trailing slash for directories
+    if gitignore_spec.match_file(rel_path):
+        return True
+    if is_dir and gitignore_spec.match_file(rel_path + "/"):
+        return True
+
+    return False
 
 # ── File extensions we consider "source code" ─────────────────────────
 _SOURCE_EXTENSIONS = frozenset({
@@ -360,8 +397,8 @@ def index_file(filepath: str, db) -> dict:
 def index_directory(dirpath: str, db) -> list[dict]:
     """Recursively index all source files under *dirpath*.
 
-    Skips directories in ``_SKIP_DIRS`` and unchanged files.  Indexes any
-    file with a recognised source-code extension.
+    Skips directories in ``_SKIP_DIRS``, files matching ``.gitignore`` patterns,
+    and unchanged files.  Indexes any file with a recognised source-code extension.
 
     Args:
         dirpath: Root directory to scan.
@@ -376,12 +413,33 @@ def index_directory(dirpath: str, db) -> list[dict]:
     dirpath = os.path.abspath(dirpath)
     total_start = time.perf_counter()
 
+    # Load .gitignore patterns from the root directory
+    gitignore_spec = _load_gitignore_spec(dirpath)
+    if gitignore_spec:
+        logger.debug("Loaded .gitignore patterns from %s", dirpath)
+
     for root, dirs, files in os.walk(dirpath, topdown=True):
-        # Prune skipped directories in-place
-        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS
-                   and not d.endswith(".egg-info")]
+        rel_root = os.path.relpath(root, dirpath)
+
+        # Prune skipped directories in-place (always-skip + gitignore)
+        def _should_keep_dir(d: str) -> bool:
+            if d in _SKIP_DIRS or d.endswith(".egg-info"):
+                return False
+            if gitignore_spec:
+                rel_path = os.path.join(rel_root, d) if rel_root != "." else d
+                if _should_skip_path(rel_path, is_dir=True, gitignore_spec=gitignore_spec):
+                    return False
+            return True
+
+        dirs[:] = [d for d in dirs if _should_keep_dir(d)]
 
         for fname in sorted(files):
+            # Skip files matching .gitignore patterns
+            if gitignore_spec:
+                rel_path = os.path.join(rel_root, fname) if rel_root != "." else fname
+                if _should_skip_path(rel_path, is_dir=False, gitignore_spec=gitignore_spec):
+                    continue
+
             ext = os.path.splitext(fname)[1].lower()
             # Accept files with known extensions, or files with a
             # tree-sitter grammar available

@@ -109,12 +109,13 @@ wheels = [
 
 [[package]]
 name = "code-memory"
-version = "1.0.4"
+version = "1.0.6"
 source = { editable = "." }
 dependencies = [
     { name = "gitpython" },
     { name = "markdown-it-py" },
     { name = "mcp", extra = ["cli"] },
+    { name = "pathspec" },
     { name = "sentence-transformers" },
     { name = "sqlite-vec" },
     { name = "tree-sitter" },
@@ -146,6 +147,7 @@ requires-dist = [
     { name = "markdown-it-py", specifier = ">=4.0.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.26.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13.0" },
+    { name = "pathspec", specifier = ">=0.12.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
