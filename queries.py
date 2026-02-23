@@ -290,7 +290,7 @@ def find_references(symbol_name: str, db, include_context: bool = True) -> list[
 
         # Get the source line at this reference
         try:
-            with open(r[1], "r") as f:
+            with open(r[1]) as f:
                 lines = f.readlines()
                 if 0 < r[2] <= len(lines):
                     ref["source_line"] = lines[r[2] - 1].strip()
