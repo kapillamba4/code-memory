@@ -203,7 +203,7 @@ def search_code(
         Dict with status, search_type, query, and results array.
 
         For topic_discovery, each result includes:
-        - file_path, relevance_score, matched_symbols, matched_docs, symbol_kinds, summary
+        - file_path, relevance_score, matched_symbols, symbol_kinds, summary
         - top_snippets: Code snippets from top-matching symbols
 
         For definition, each result includes:

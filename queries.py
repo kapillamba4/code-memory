@@ -561,13 +561,16 @@ def _add_context_chunks(results: list[dict], db) -> list[dict]:
 def discover_topic(topic_query: str, db, top_k: int = 15, include_snippets: bool = True) -> list[dict]:
     """Discover files and code related to a high-level topic or feature.
 
-    This function performs broad semantic search across both code symbols
-    AND documentation chunks to find all files related to a conceptual topic.
-    Results are aggregated and deduplicated by file path.
+    This function performs broad semantic search across code symbols to find
+    all files related to a conceptual topic. Results are aggregated and
+    deduplicated by file path.
 
     This is the PRIMARY function for "find all files related to X" queries
     where X is a feature, domain concept, or topic (e.g., "auth", "workouts",
     "payment processing", "user notifications").
+
+    Note: This function searches CODE only. Use search_docs() for documentation
+    and README files.
 
     Args:
         topic_query: A natural language topic, feature name, or domain concept.
@@ -581,14 +584,12 @@ def discover_topic(topic_query: str, db, top_k: int = 15, include_snippets: bool
         - file_path: Path to the relevant file
         - relevance_score: Combined semantic relevance score
         - matched_symbols: List of symbol names that matched the topic
-        - matched_docs: List of doc section titles that matched
         - symbol_kinds: Types of symbols found (function, class, etc.)
         - summary: Brief description of what in this file is relevant
         - top_snippets: Code snippets from top-matching symbols (if include_snippets)
     """
-    # Run parallel searches on both code symbols and documentation
+    # Search code symbols only (documentation is handled by search_docs)
     code_results = hybrid_search(topic_query, db, top_k=50)
-    doc_results = search_documentation(topic_query, db, top_k=50)
 
     # Aggregate by file path, collecting all matched items
     file_aggregates: dict[str, dict] = {}
@@ -602,7 +603,6 @@ def discover_topic(topic_query: str, db, top_k: int = 15, include_snippets: bool
                 "file_path": fp,
                 "relevance_score": 0.0,
                 "matched_symbols": [],
-                "matched_docs": [],
                 "symbol_kinds": set(),
                 "symbol_details": [],  # Store full details for snippets
             }
@@ -617,24 +617,6 @@ def discover_topic(topic_query: str, db, top_k: int = 15, include_snippets: bool
             "source_text": r.get("source_text"),
             "score": r.get("score"),
         })
-
-    for r in doc_results:
-        fp = r.get("source_file", "")
-        if not fp:
-            continue
-        if fp not in file_aggregates:
-            file_aggregates[fp] = {
-                "file_path": fp,
-                "relevance_score": 0.0,
-                "matched_symbols": [],
-                "matched_docs": [],
-                "symbol_kinds": set(),
-                "symbol_details": [],
-            }
-        file_aggregates[fp]["relevance_score"] += r.get("score", 0.5)
-        section = r.get("section_title", "")
-        if section:
-            file_aggregates[fp]["matched_docs"].append(section)
 
     # Sort by relevance and take top_k
     sorted_files = sorted(
@@ -657,7 +639,6 @@ def discover_topic(topic_query: str, db, top_k: int = 15, include_snippets: bool
             "file_path": item["file_path"],
             "relevance_score": round(item["relevance_score"], 4),
             "matched_symbols": item["matched_symbols"][:10],
-            "matched_docs": item["matched_docs"][:5],
             "symbol_kinds": kinds,
             "summary": f"Contains {kinds}: {symbol_summary}" if kinds else f"Related symbols: {symbol_summary}",
         }
