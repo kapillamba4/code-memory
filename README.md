@@ -2,6 +2,12 @@
 
 A deterministic, high-precision **code intelligence layer** exposed as a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server.
 
+- **No API key required** — runs entirely locally with sentence-transformers
+- **1 min setup** — just `uvx code-memory` and you're ready
+- **Token saving by 50%** — precise code retrieval instead of dumping entire files
+
+**Please help star code-memory if you like this project!**
+
 ## Why code-memory?
 
 Finding the right context from a large codebase is **expensive**, **inaccurate**, and **limited by context windows**. Dumping files into prompts wastes tokens, and LLMs lose track of the actual task as context fills up.
