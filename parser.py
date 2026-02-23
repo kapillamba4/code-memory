@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pathspec
 from tree_sitter import Language, Node, Parser
@@ -20,6 +21,9 @@ from tree_sitter import Language, Node, Parser
 import db as db_mod
 
 logger = logging.getLogger(__name__)
+
+# Number of worker threads for parallel indexing (configurable via env)
+MAX_WORKERS = int(os.environ.get("CODE_MEMORY_MAX_WORKERS", "4"))
 
 # ── Directories to always skip (even without .gitignore) ───────────────
 _SKIP_DIRS = frozenset({
@@ -452,7 +456,11 @@ def index_file(filepath: str, db) -> dict:
 # ---------------------------------------------------------------------------
 
 def index_directory(dirpath: str, db, progress_callback=None) -> list[dict]:
-    """Recursively index all source files under *dirpath*.
+    """Recursively index all source files under *dirpath* using parallel processing.
+
+    Uses ThreadPoolExecutor for parallel file I/O and parsing, while keeping
+    embedding generation sequential (sentence-transformers releases GIL during
+    inference). Processes files in batches for embedding efficiency.
 
     Skips directories in ``_SKIP_DIRS``, files matching ``.gitignore`` patterns
     (including nested .gitignore files), and unchanged files.  Indexes any file
@@ -476,7 +484,7 @@ def index_directory(dirpath: str, db, progress_callback=None) -> list[dict]:
     gitignore = GitignoreMatcher(dirpath)
     logger.debug("Initialized gitignore matcher for %s", dirpath)
 
-    # First pass: count total files for progress reporting
+    # First pass: collect all files to index
     total_files = 0
     file_list = []
     for root, dirs, files in os.walk(dirpath, topdown=True):
@@ -494,58 +502,96 @@ def index_directory(dirpath: str, db, progress_callback=None) -> list[dict]:
                 file_list.append(os.path.join(root, fname))
                 total_files += 1
 
-    # Reset gitignore for actual indexing pass
-    gitignore = GitignoreMatcher(dirpath)
+    if not file_list:
+        return []
 
+    # Report initial phase
+    if progress_callback:
+        progress_callback(0, total_files, "Scanning files for changes...")
+
+    # Phase 1: Parallel file freshness check and parsing
+    # Each worker returns parsed data (not yet stored to DB)
     files_processed = 0
-    for root, dirs, files in os.walk(dirpath, topdown=True):
-        rel_root = os.path.relpath(root, dirpath)
+    parsed_files: list[tuple[str, dict | None, Exception | None]] = []  # (filepath, parsed_data, error)
 
-        # Check for .gitignore in current directory and load it
-        if rel_root != ".":
-            gitignore.check_dir_for_gitignore(root, rel_root)
+    def _parse_file_task(fpath: str) -> tuple[str, dict | None, Exception | None]:
+        """Parse a single file and return extracted data (without DB writes)."""
+        try:
+            parsed = _parse_file_for_indexing(fpath, db)
+            return (fpath, parsed, None)
+        except Exception as e:
+            return (fpath, None, e)
 
-        # Prune skipped directories in-place (always-skip + gitignore)
-        def _should_keep_dir(d: str) -> bool:
-            if d in _SKIP_DIRS or d.endswith(".egg-info"):
-                return False
-            rel_path = os.path.join(rel_root, d) if rel_root != "." else d
-            if gitignore.should_skip(rel_path, is_dir=True):
-                return False
-            return True
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # Submit all parsing tasks
+        future_to_path = {executor.submit(_parse_file_task, fpath): fpath for fpath in file_list}
 
-        dirs[:] = [d for d in dirs if _should_keep_dir(d)]
+        for future in as_completed(future_to_path):
+            fpath, parsed_data, error = future.result()
+            parsed_files.append((fpath, parsed_data, error))
 
-        for fname in sorted(files):
-            # Skip files matching .gitignore patterns
-            rel_path = os.path.join(rel_root, fname) if rel_root != "." else fname
-            if gitignore.should_skip(rel_path, is_dir=False):
-                continue
-
-            ext = os.path.splitext(fname)[1].lower()
-            # Accept files with known extensions, or files with a
-            # tree-sitter grammar available
-            if ext not in _SOURCE_EXTENSIONS and _load_language(ext) is None:
-                continue
-
-            fpath = os.path.join(root, fname)
-            try:
-                result = index_file(fpath, db)
-                results.append(result)
-            except Exception:
-                logger.exception("Failed to index %s", fpath)
-                results.append({
-                    "file": fpath,
-                    "symbols_indexed": 0,
-                    "references_indexed": 0,
-                    "skipped": True,
-                    "error": True,
-                })
-
-            # Report progress
             files_processed += 1
             if progress_callback:
-                progress_callback(files_processed, total_files, f"Indexing code: {fname}")
+                fname = os.path.basename(fpath)
+                progress_callback(files_processed, total_files, f"Parsing: {fname}")
+
+    # Phase 2: Batch embedding generation (sequential, GIL released during inference)
+    if progress_callback:
+        progress_callback(total_files, total_files, "Generating embeddings...")
+
+    # Collect all texts that need embedding
+    embedding_batches: list[tuple[str, list[tuple]]] = []  # (filepath, [(embed_text, symbol_data), ...])
+
+    for fpath, parsed_data, error in parsed_files:
+        if error or parsed_data is None or parsed_data.get("skipped"):
+            continue
+
+        embed_inputs = []
+        for sym in parsed_data.get("symbols", []):
+            embed_input = f"{sym['kind']} {sym['name']}: {sym['source_text'][:1000]}"
+            embed_inputs.append((embed_input, sym))
+
+        if embed_inputs:
+            embedding_batches.append((fpath, embed_inputs, parsed_data))
+
+    # Generate embeddings in batch
+    all_embed_texts = []
+    for fpath, embed_inputs, _ in embedding_batches:
+        for embed_text, _ in embed_inputs:
+            all_embed_texts.append(embed_text)
+
+    all_embeddings = db_mod.embed_texts_batch(all_embed_texts, batch_size=64) if all_embed_texts else []
+
+    # Phase 3: Sequential DB writes (to avoid SQLite conflicts)
+    if progress_callback:
+        progress_callback(total_files, total_files, "Storing to database...")
+
+    embed_idx = 0
+    for fpath, parsed_data, error in parsed_files:
+        if error:
+            logger.exception("Failed to index %s", fpath)
+            results.append({
+                "file": fpath,
+                "symbols_indexed": 0,
+                "references_indexed": 0,
+                "skipped": True,
+                "error": True,
+            })
+            continue
+
+        if parsed_data is None or parsed_data.get("skipped"):
+            results.append({
+                "file": fpath,
+                "symbols_indexed": 0,
+                "references_indexed": 0,
+                "skipped": True,
+            })
+            continue
+
+        # Find embeddings for this file
+        file_result = _store_parsed_file(fpath, parsed_data, db, embedding_batches, all_embeddings, embed_idx)
+        embed_idx += len(parsed_data.get("symbols", []))
+        results.append(file_result)
 
     # Log performance summary
     total_elapsed = time.perf_counter() - total_start
@@ -554,9 +600,145 @@ def index_directory(dirpath: str, db, progress_callback=None) -> list[dict]:
     files_indexed = sum(1 for r in results if not r.get("skipped"))
     files_skipped = sum(1 for r in results if r.get("skipped") and not r.get("error"))
 
-    logger.info(
-        "Indexed %d files (%d skipped) in %.2fs - %d symbols, %d references",
-        files_indexed, files_skipped, total_elapsed, total_symbols, total_refs
-    )
+    if total_files > 0:
+        files_per_sec = total_files / total_elapsed if total_elapsed > 0 else 0
+        logger.info(
+            "Indexed %d files (%d skipped) in %.2fs (%.1f files/s) - %d symbols, %d references",
+            files_indexed, files_skipped, total_elapsed, files_per_sec, total_symbols, total_refs
+        )
+    else:
+        logger.info(
+            "Indexed %d files (%d skipped) in %.2fs - %d symbols, %d references",
+            files_indexed, files_skipped, total_elapsed, total_symbols, total_refs
+        )
 
     return results
+
+
+def _parse_file_for_indexing(filepath: str, db) -> dict | None:
+    """Parse a file and extract symbols/references without DB writes.
+
+    Returns parsed data structure or None if skipped.
+    """
+    filepath = os.path.abspath(filepath)
+    ext = os.path.splitext(filepath)[1].lower()
+
+    # Check freshness
+    mtime = os.path.getmtime(filepath)
+    row = db.execute(
+        "SELECT id, last_modified FROM files WHERE path = ?", (filepath,)
+    ).fetchone()
+
+    if row and row[1] >= mtime:
+        return {"skipped": True, "file_id": row[0]}
+
+    # Read file
+    source_bytes = Path(filepath).read_bytes()
+    source_text = source_bytes.decode("utf-8", errors="replace")
+
+    fhash = db_mod.file_hash(filepath)
+
+    result = {
+        "skipped": False,
+        "mtime": mtime,
+        "fhash": fhash,
+        "symbols": [],
+        "references": [],
+        "fallback": False,
+    }
+
+    # Try tree-sitter parsing
+    lang = _load_language(ext)
+
+    if lang is not None:
+        parser = Parser(lang)
+        tree = parser.parse(source_bytes)
+
+        # Extract symbols (flat list for batch processing)
+        raw_symbols = _extract_symbols(tree.root_node, source_bytes)
+        all_symbols: list[dict] = []
+
+        def _collect_symbols(sym_list):
+            for sym in sym_list:
+                all_symbols.append(sym)
+                if sym.get("children"):
+                    _collect_symbols(sym["children"])
+
+        _collect_symbols(raw_symbols)
+        result["symbols"] = all_symbols
+
+        # Extract references
+        refs = _extract_references(tree.root_node, source_bytes)
+        result["references"] = refs
+    else:
+        # Fallback: entire file as one symbol
+        basename = os.path.basename(filepath)
+        result["symbols"] = [{
+            "name": basename,
+            "kind": "file",
+            "line_start": 1,
+            "line_end": source_text.count("\n") + 1,
+            "source_text": source_text[:5000],
+            "parent_id": None,
+        }]
+        result["fallback"] = True
+
+    return result
+
+
+def _store_parsed_file(
+    filepath: str,
+    parsed_data: dict,
+    db,
+    embedding_batches: list,
+    all_embeddings: list,
+    start_embed_idx: int
+) -> dict:
+    """Store parsed file data to database with pre-computed embeddings."""
+    filepath = os.path.abspath(filepath)
+
+    # Upsert file record
+    file_id = db_mod.upsert_file(db, filepath, parsed_data["mtime"], parsed_data["fhash"])
+
+    # Delete stale data
+    db_mod.delete_file_data(db, file_id)
+
+    symbols_indexed = 0
+    references_indexed = 0
+
+    # Find embeddings for this file
+    file_embeddings = None
+    embed_offset = 0
+    for bfpath, embed_inputs, _ in embedding_batches:
+        if bfpath == filepath:
+            file_embeddings = all_embeddings[start_embed_idx + embed_offset:start_embed_idx + embed_offset + len(embed_inputs)]
+            break
+        embed_offset += len(embed_inputs)
+
+    # Store symbols with embeddings
+    if parsed_data.get("symbols") and file_embeddings:
+        with db_mod.transaction(db):
+            for i, sym in enumerate(parsed_data["symbols"]):
+                sym_id = db_mod.upsert_symbol(
+                    db, sym["name"], sym["kind"], file_id,
+                    sym["line_start"], sym["line_end"],
+                    sym.get("parent_id"), sym["source_text"],
+                    auto_commit=False
+                )
+                if i < len(file_embeddings):
+                    db_mod.upsert_embedding(db, sym_id, file_embeddings[i], auto_commit=False)
+                symbols_indexed += 1
+
+    # Store references
+    if parsed_data.get("references"):
+        with db_mod.transaction(db):
+            for ref in parsed_data["references"]:
+                db_mod.upsert_reference(db, ref["name"], file_id, ref["line"], auto_commit=False)
+                references_indexed += 1
+
+    return {
+        "file": filepath,
+        "symbols_indexed": symbols_indexed,
+        "references_indexed": references_indexed,
+        "skipped": False,
+    }

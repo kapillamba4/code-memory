@@ -638,3 +638,108 @@ def upsert_doc_embedding(
     )
     if auto_commit:
         db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Index Statistics
+# ---------------------------------------------------------------------------
+
+def get_index_stats(db: sqlite3.Connection, project_dir: str) -> dict:
+    """Get comprehensive statistics about the index.
+
+    Args:
+        db: An open sqlite3.Connection.
+        project_dir: The project directory path.
+
+    Returns:
+        Dictionary with index health metrics including:
+        - Total symbols, files, doc chunks indexed
+        - Index freshness (last indexed timestamps)
+        - Embedding model info and dimension
+        - Database size and WAL status
+    """
+    import os
+
+    # Get counts
+    symbols_count = db.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+    files_count = db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    doc_chunks_count = db.execute("SELECT COUNT(*) FROM doc_chunks").fetchone()[0]
+    doc_files_count = db.execute("SELECT COUNT(*) FROM doc_files").fetchone()[0]
+    references_count = db.execute("SELECT COUNT(*) FROM references_").fetchone()[0]
+    symbol_embeddings_count = db.execute("SELECT COUNT(*) FROM symbol_embeddings").fetchone()[0]
+    doc_embeddings_count = db.execute("SELECT COUNT(*) FROM doc_embeddings").fetchone()[0]
+
+    # Get symbol kinds distribution
+    symbol_kinds = dict(db.execute(
+        "SELECT kind, COUNT(*) FROM symbols GROUP BY kind ORDER BY COUNT(*) DESC"
+    ).fetchall())
+
+    # Get file types distribution (by extension)
+    file_extensions = dict(db.execute(
+        """SELECT substr(path, instr(path, '.')) as ext, COUNT(*) as cnt
+           FROM files
+           WHERE path LIKE '%.%'
+           GROUP BY ext
+           ORDER BY cnt DESC
+           LIMIT 10"""
+    ).fetchall())
+
+    # Get last indexed timestamps
+    last_file_indexed = db.execute(
+        "SELECT MAX(last_modified) FROM files"
+    ).fetchone()[0]
+    last_doc_indexed = db.execute(
+        "SELECT MAX(last_modified) FROM doc_files"
+    ).fetchone()[0]
+
+    # Get embedding model info
+    embedding_model = db.execute(
+        "SELECT value FROM index_metadata WHERE key = 'embedding_model'"
+    ).fetchone()
+    embedding_dim = db.execute(
+        "SELECT value FROM index_metadata WHERE key = 'embedding_dim'"
+    ).fetchone()
+
+    # Database file size
+    db_path = os.path.join(os.path.abspath(project_dir), "code_memory.db")
+    db_size_bytes = os.path.getsize(db_path) if os.path.exists(db_path) else 0
+    db_size_mb = round(db_size_bytes / (1024 * 1024), 2)
+
+    # WAL status
+    wal_path = db_path + "-wal"
+    wal_exists = os.path.exists(wal_path)
+    wal_size_mb = round(os.path.getsize(wal_path) / (1024 * 1024), 2) if wal_exists else 0
+
+    # Check journal mode
+    journal_mode = db.execute("PRAGMA journal_mode").fetchone()[0]
+
+    return {
+        "indexed": symbols_count > 0 or doc_chunks_count > 0,
+        "counts": {
+            "symbols": symbols_count,
+            "files": files_count,
+            "doc_chunks": doc_chunks_count,
+            "doc_files": doc_files_count,
+            "references": references_count,
+            "symbol_embeddings": symbol_embeddings_count,
+            "doc_embeddings": doc_embeddings_count,
+        },
+        "distributions": {
+            "symbol_kinds": symbol_kinds,
+            "file_extensions": file_extensions,
+        },
+        "freshness": {
+            "last_file_indexed": last_file_indexed,
+            "last_doc_indexed": last_doc_indexed,
+        },
+        "embedding": {
+            "model": embedding_model[0] if embedding_model else None,
+            "dimension": int(embedding_dim[0]) if embedding_dim else None,
+        },
+        "database": {
+            "size_mb": db_size_mb,
+            "journal_mode": journal_mode,
+            "wal_exists": wal_exists,
+            "wal_size_mb": wal_size_mb,
+        },
+    }

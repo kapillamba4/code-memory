@@ -108,7 +108,8 @@ def hybrid_search(query: str, db, top_k: int = 10) -> list[dict]:
         top_k: Number of results to return.
 
     Returns:
-        A list of result dicts sorted by descending RRF score.
+        A list of result dicts sorted by descending RRF score, including
+        match_reason, match_highlights, and confidence.
     """
     bm25_results = _bm25_search(query, db, top_k=50)
     vec_results = _vector_search(query, db, top_k=50)
@@ -116,6 +117,7 @@ def hybrid_search(query: str, db, top_k: int = 10) -> list[dict]:
     # Build RRF score map keyed by symbol_id
     scores: dict[int, float] = {}
     details: dict[int, dict] = {}
+    match_sources: dict[int, list[str]] = {}  # Track which search found each result
 
     for rank, r in enumerate(bm25_results, start=1):
         sid = r["symbol_id"]
@@ -128,6 +130,8 @@ def hybrid_search(query: str, db, top_k: int = 10) -> list[dict]:
             "line_end": r["line_end"],
             "source_text": r["source_text"],
         }
+        match_sources[sid] = match_sources.get(sid, [])
+        match_sources[sid].append("bm25")
 
     for rank, r in enumerate(vec_results, start=1):
         sid = r["symbol_id"]
@@ -141,14 +145,112 @@ def hybrid_search(query: str, db, top_k: int = 10) -> list[dict]:
                 "line_end": r["line_end"],
                 "source_text": r["source_text"],
             }
+        match_sources[sid] = match_sources.get(sid, [])
+        if "vector" not in match_sources[sid]:
+            match_sources[sid].append("vector")
 
     # Sort by descending RRF score
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
 
-    return [
-        {**details[sid], "score": round(score, 6)}
-        for sid, score in ranked
-    ]
+    # Build results with match metadata
+    results = []
+    for sid, score in ranked:
+        sources = match_sources.get(sid, [])
+        is_hybrid = len(sources) == 2
+
+        # Determine match reason
+        if is_hybrid:
+            match_reason = "hybrid (BM25 + semantic)"
+        elif "bm25" in sources:
+            match_reason = "keyword match (BM25)"
+        else:
+            match_reason = "semantic match (vector)"
+
+        # Calculate confidence (normalize RRF score to 0-1 range)
+        # Max possible RRF score for a single source is 1/61 ≈ 0.0164
+        # For hybrid it's 2/61 ≈ 0.0328. We normalize accordingly.
+        max_single_rrf = 1.0 / (_RRF_K + 1)  # ≈ 0.0164
+        max_hybrid_rrf = 2.0 * max_single_rrf  # ≈ 0.0328
+        if is_hybrid:
+            confidence = min(1.0, score / max_hybrid_rrf)
+        else:
+            confidence = min(1.0, (score / max_single_rrf) * 0.7)  # Cap single-source at 0.7
+
+        result = {
+            **details[sid],
+            "score": round(score, 6),
+            "match_reason": match_reason,
+            "confidence": round(confidence, 3),
+            "match_highlights": [],  # Will be populated below if BM25 match
+        }
+
+        # Get highlights for BM25 matches using FTS5 highlight function
+        if "bm25" in sources:
+            highlights = _get_bm25_highlights(query, details[sid]["source_text"], db)
+            result["match_highlights"] = highlights
+
+        results.append(result)
+
+    return results
+
+
+def _get_bm25_highlights(query: str, source_text: str, db) -> list[str]:
+    """Extract highlighted snippets using FTS5.
+
+    Returns up to 3 highlighted text snippets showing where the query matched.
+    """
+    if not source_text or not query:
+        return []
+
+    # Use FTS5 highlight function to get matched portions
+    safe_query = query.replace('"', '""')
+    try:
+        # Create a temporary FTS5 query to get highlights
+        # We use the snippet function which returns highlighted fragments
+        rows = db.execute(
+            """
+            SELECT snippet(symbols_fts, 1, '>>>', '<<<', '...', 20) as highlight
+            FROM symbols_fts
+            WHERE symbols_fts MATCH ?
+            LIMIT 3
+            """,
+            (safe_query,),
+        ).fetchall()
+
+        highlights = []
+        for row in rows:
+            if row[0] and row[0] not in ("...", ""):
+                # Clean up the highlight markers for readability
+                highlight = row[0].replace(">>>", "**").replace("<<<", "**")
+                if len(highlight) > 10:  # Only include meaningful highlights
+                    highlights.append(highlight)
+
+        return highlights[:3]  # Return at most 3 highlights
+    except Exception:
+        # Fallback: find query terms in source text
+        return _simple_highlights(query, source_text)
+
+
+def _simple_highlights(query: str, source_text: str) -> list[str]:
+    """Simple fallback highlight extraction when FTS5 isn't available."""
+    highlights = []
+    query_terms = query.lower().split()
+    lines = source_text.split("\n")
+
+    for line in lines[:20]:  # Check first 20 lines
+        line_lower = line.lower()
+        for term in query_terms:
+            if term in line_lower and len(line.strip()) > 10:
+                # Truncate long lines
+                snippet = line.strip()[:100]
+                if len(snippet) > 50:
+                    snippet = snippet[:97] + "..."
+                highlights.append(snippet)
+                break
+        if len(highlights) >= 3:
+            break
+
+    return highlights[:3]
 
 
 # ---------------------------------------------------------------------------

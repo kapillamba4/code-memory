@@ -128,6 +128,45 @@ def check_index_status(directory: str) -> dict:
         }
 
 
+# ── Tool 0.5: get_index_stats ─────────────────────────────────────────────
+@mcp.tool()
+def get_index_stats(directory: str) -> dict:
+    """USE THIS TOOL to get comprehensive statistics about the code index.
+
+    This tool provides detailed metrics about the index health, including
+    file counts, symbol distributions, embedding model info, and database size.
+
+    TRIGGER - Call this tool when:
+    - You want to understand what's in the index
+    - Debugging search quality issues
+    - Checking index freshness or coverage
+    - Monitoring database size and health
+
+    Do NOT use this tool for:
+    - Checking if indexing is needed (use check_index_status)
+    - Searching for code (use search_code)
+
+    Args:
+        directory: Path to the project directory.
+
+    Returns:
+        Dictionary with:
+        - indexed: boolean - true if anything has been indexed
+        - counts: Symbol, file, chunk, and embedding counts
+        - distributions: Symbol kinds and file extensions
+        - freshness: Last indexed timestamps
+        - embedding: Model name and dimension
+        - database: Size, journal mode, and WAL status
+    """
+    with logging_config.ToolLogger("get_index_stats", directory=directory):
+        try:
+            database = db_mod.get_db(directory)
+            stats = db_mod.get_index_stats(database, directory)
+            return {"status": "ok", **stats}
+        except Exception as e:
+            return errors.format_error(e)
+
+
 # ── Tool 1: search_code ───────────────────────────────────────────────────
 @mcp.tool()
 def search_code(
@@ -294,6 +333,7 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
     - Enables semantic search via vector embeddings
     - Builds cross-reference graphs for "find all usages" queries
     - Incremental indexing: unchanged files are automatically skipped
+    - PARALLEL PROCESSING: Uses thread pool for faster indexing
 
     Do NOT use this tool for:
     - Non-code files (images, binaries, data files)
@@ -306,6 +346,8 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
     Returns:
         Summary with files_indexed, total_symbols, total_chunks, and details.
     """
+    import time
+
     with logging_config.ToolLogger("index_codebase", directory=directory) as log:
         try:
             # Validate directory
@@ -313,20 +355,39 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
 
             database = db_mod.get_db(str(directory_path))
 
+            # Track timing for throughput calculation
+            start_time = time.perf_counter()
+            phase_start = start_time
+
             # Report initial progress
             await ctx.report_progress(0, 100, "Starting indexing...")
 
             # Create progress callback that schedules progress updates on the event loop
             loop = asyncio.get_running_loop()
-            progress_state = {"current": 0, "total": 0, "phase": "code"}
+            progress_state = {"current": 0, "total": 0, "phase": "scanning"}
 
             def sync_progress_callback(current: int, total: int, message: str):
-                """Sync callback that schedules async progress reporting."""
+                """Sync callback that schedules async progress reporting with throughput info."""
                 progress_state["current"] = current
                 progress_state["total"] = total
+
+                # Calculate throughput and ETA
+                elapsed = time.perf_counter() - start_time
+                if elapsed > 0 and current > 0:
+                    files_per_sec = current / elapsed
+                    if files_per_sec > 0 and total > current:
+                        remaining_files = total - current
+                        eta_seconds = remaining_files / files_per_sec
+                        eta_str = f", ETA: {int(eta_seconds)}s" if eta_seconds < 60 else f", ETA: {int(eta_seconds / 60)}m"
+                    else:
+                        eta_str = ""
+                    throughput_str = f" ({files_per_sec:.1f} files/s{eta_str})"
+                else:
+                    throughput_str = ""
+
                 # Schedule the async progress report on the event loop
                 asyncio.run_coroutine_threadsafe(
-                    ctx.report_progress(current, total, message),
+                    ctx.report_progress(current, total, f"{message}{throughput_str}"),
                     loop
                 )
 
@@ -334,7 +395,7 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
             code_logger = logging_config.IndexingLogger("code")
             code_logger.start(str(directory_path))
 
-            await ctx.report_progress(0, 100, "Scanning code files...")
+            await ctx.report_progress(0, 100, "Phase 1/3: Scanning code files...")
 
             code_results = await asyncio.to_thread(
                 parser_mod.index_directory,
@@ -361,7 +422,7 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
             code_file_count = len(code_results)
             doc_progress_offset = code_file_count
 
-            await ctx.report_progress(code_file_count, code_file_count, "Scanning documentation files...")
+            await ctx.report_progress(code_file_count, code_file_count, "Phase 2/3: Scanning documentation files...")
 
             doc_results = await asyncio.to_thread(
                 doc_parser_mod.index_doc_directory,
@@ -383,7 +444,7 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
             doc_skipped = [r for r in doc_results if r.get("skipped")]
 
             # Extract docstrings from indexed code
-            await ctx.report_progress(0, 0, "Extracting docstrings...")
+            await ctx.report_progress(0, 0, "Phase 3/3: Extracting docstrings...")
             docstring_results = await asyncio.to_thread(
                 doc_parser_mod.extract_docstrings_from_code,
                 database
@@ -393,11 +454,21 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
             total_chunks = sum(r.get("chunks_indexed", 0) for r in doc_indexed)
             log.set_result_count(total_symbols + total_chunks + len(docstring_results))
 
-            await ctx.report_progress(100, 100, "Indexing complete!")
+            # Calculate final throughput
+            total_elapsed = time.perf_counter() - start_time
+            total_files = len(code_results) + len(doc_results)
+            files_per_sec = total_files / total_elapsed if total_elapsed > 0 else 0
+
+            await ctx.report_progress(100, 100, f"Indexing complete! ({files_per_sec:.1f} files/s)")
 
             return {
                 "status": "ok",
                 "directory": str(directory_path),
+                "performance": {
+                    "total_time_seconds": round(total_elapsed, 2),
+                    "files_per_second": round(files_per_sec, 1),
+                    "total_files_processed": total_files,
+                },
                 "code": {
                     "files_indexed": len(indexed),
                     "files_skipped": len(skipped),
