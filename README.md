@@ -2,7 +2,11 @@
 
 A deterministic, high-precision **code intelligence layer** exposed as a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server.
 
-`code-memory` gives your AI coding assistant structured access to your codebase through three focused pathways — eliminating context-window bloat and vague "search everything" queries.
+## Why code-memory?
+
+Finding the right context from a large codebase is **expensive**, **inaccurate**, and **limited by context windows**. Dumping files into prompts wastes tokens, and LLMs lose track of the actual task as context fills up.
+
+Instead of manually hunting with `grep`/`find` or dumping raw file text, `code-memory` runs semantic searches against a locally indexed codebase. Inspired by [claude-context](https://github.com/redmonkez12/claude-context), but designed from the ground up for large-scale local search.
 
 ## Supported Languages
 
