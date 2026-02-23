@@ -18,40 +18,11 @@ Instead of manually hunting with `grep`/`find` or dumping raw file text, `code-m
 
 ## Supported Languages
 
-### Full AST Support (Tree-sitter)
+**Full AST Support** (structural parsing with symbol extraction): Python, JavaScript/TypeScript, Java, Go, Rust, C/C++, Ruby, Kotlin
 
-These languages have structural parsing with symbol extraction (functions, classes, methods, etc.):
+**Fallback Support** (whole-file indexing): C#, Swift, Scala, Lua, Shell, Config (yaml/toml/json), Web (html/css), SQL, Markdown
 
-| Language | Extensions |
-|----------|------------|
-| Python | `.py` |
-| JavaScript | `.js`, `.jsx` |
-| TypeScript | `.ts`, `.tsx` |
-| Java | `.java` |
-| Go | `.go` |
-| Rust | `.rs` |
-| C | `.c`, `.h` |
-| C++ | `.cpp`, `.hpp`, `.cc`, `.cxx` |
-| Ruby | `.rb` |
-| Kotlin | `.kt`, `.kts` |
-
-### Fallback Support (Whole-file Indexing)
-
-These file types are indexed as complete units for BM25 and semantic search:
-
-| Category | Extensions |
-|----------|------------|
-| C# | `.cs` |
-| Swift | `.swift` |
-| Scala | `.scala` |
-| Lua | `.lua` |
-| Shell | `.sh`, `.bash`, `.zsh` |
-| Config | `.yaml`, `.yml`, `.toml`, `.json` |
-| Web | `.html`, `.css`, `.scss` |
-| Database | `.sql` |
-| Docs | `.md`, `.txt` |
-
-> **Note:** Files and directories matching patterns in your `.gitignore` are automatically skipped during indexing. This excludes build artifacts, dependencies, and other generated files.
+> Files matching `.gitignore` patterns are automatically skipped.
 
 ## Architecture: Progressive Disclosure
 
@@ -251,11 +222,38 @@ For Windows:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `CODE_MEMORY_LOG_LEVEL` | Logging verbosity (DEBUG, INFO, WARNING, ERROR) | INFO |
+| `EMBEDDING_MODEL` | HuggingFace model ID for embeddings | `jinaai/jina-code-embeddings-0.5b` |
 
 Example:
 ```bash
 CODE_MEMORY_LOG_LEVEL=DEBUG uvx code-memory
 ```
+
+### Custom Embedding Model
+
+You can use a different embedding model by setting the `EMBEDDING_MODEL` environment variable:
+
+```bash
+EMBEDDING_MODEL="BAAI/bge-small-en-v1.5" uvx code-memory
+```
+
+For MCP hosts, add the environment variable to your configuration:
+
+```json
+{
+  "mcpServers": {
+    "code-memory": {
+      "command": "uvx",
+      "args": ["code-memory"],
+      "env": {
+        "EMBEDDING_MODEL": "BAAI/bge-small-en-v1.5"
+      }
+    }
+  }
+}
+```
+
+> **Note:** Changing the embedding model will invalidate existing indexes. You'll need to re-run `index_codebase` after switching models.
 
 ## Tools
 

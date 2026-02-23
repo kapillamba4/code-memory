@@ -12,6 +12,7 @@ All writes use upsert semantics so re-indexing is idempotent.
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
@@ -31,8 +32,9 @@ logger = logging.getLogger(__name__)
 _model = None
 _embedding_dim = None
 
-# Model identifier - change this if you switch to a different embedding model
-EMBEDDING_MODEL_NAME = "jinaai/jina-code-embeddings-0.5b"
+# Model identifier - can be overridden via EMBEDDING_MODEL environment variable
+DEFAULT_EMBEDDING_MODEL = "jinaai/jina-code-embeddings-0.5b"
+EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
 
 
 def get_embedding_model():
@@ -46,7 +48,7 @@ def get_embedding_model():
         )
         # Cache the embedding dimension from the model
         _embedding_dim = _model.get_sentence_embedding_dimension()
-        logger.info(f"Loaded embedding model with dimension: {_embedding_dim}")
+        logger.info(f"Loaded embedding model '{EMBEDDING_MODEL_NAME}' with dimension: {_embedding_dim}")
     return _model
 
 

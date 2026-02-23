@@ -563,6 +563,7 @@ def search_history(
 def main():
     """Entry point for the MCP server when installed as a package."""
     # Warm up embedding model to avoid cold-start latency
+    logger.info(f"Using embedding model: {db_mod.EMBEDDING_MODEL_NAME}")
     logger.info("Warming up embedding model...")
     db_mod.warmup_embedding_model()
     logger.info("Embedding model ready")
