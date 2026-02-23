@@ -141,11 +141,11 @@ class TestIndexingLogger:
         assert idx_logger.files_processed == 2
         assert idx_logger.items_indexed == 5
 
-    def test_tracks_files_skipped(self):
-        """Test that files skipped are tracked."""
+    def test_tracks_files_unchanged(self):
+        """Test that files unchanged are tracked."""
         idx_logger = logging_config.IndexingLogger("test")
         idx_logger.file_skipped("file1.py", "unchanged")
-        assert idx_logger.files_skipped == 1
+        assert idx_logger.files_unchanged == 1
 
 
 class TestPreconfiguredLoggers:

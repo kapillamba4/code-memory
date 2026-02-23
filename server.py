@@ -357,7 +357,6 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
 
             # Track timing for throughput calculation
             start_time = time.perf_counter()
-            phase_start = start_time
 
             # Report initial progress
             await ctx.report_progress(0, 100, "Starting indexing...")
@@ -471,13 +470,13 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
                 },
                 "code": {
                     "files_indexed": len(indexed),
-                    "files_skipped": len(skipped),
+                    "files_unchanged": len(skipped),
                     "total_symbols": total_symbols,
                     "total_references": sum(r.get("references_indexed", 0) for r in indexed),
                 },
                 "documentation": {
                     "files_indexed": len(doc_indexed),
-                    "files_skipped": len(doc_skipped),
+                    "files_unchanged": len(doc_skipped),
                     "total_chunks": total_chunks,
                     "docstrings_extracted": len(docstring_results),
                 },

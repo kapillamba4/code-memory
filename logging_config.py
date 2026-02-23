@@ -155,7 +155,7 @@ class IndexingLogger:
         self.logger = get_logger("indexing")
         self.files_processed = 0
         self.items_indexed = 0
-        self.files_skipped = 0
+        self.files_unchanged = 0
         self.start_time: datetime | None = None
 
     def start(self, directory: str) -> None:
@@ -171,7 +171,7 @@ class IndexingLogger:
 
     def file_skipped(self, filepath: str, reason: str) -> None:
         """Log skipped file."""
-        self.files_skipped += 1
+        self.files_unchanged += 1
         self.logger.debug(f"Skipped {self.indexer_type}: {filepath} ({reason})")
 
     def complete(self) -> None:
@@ -180,7 +180,7 @@ class IndexingLogger:
         self.logger.info(
             f"Completed {self.indexer_type} indexing: "
             f"files={self.files_processed} items={self.items_indexed} "
-            f"skipped={self.files_skipped} duration={duration_ms:.1f}ms"
+            f"unchanged={self.files_unchanged} duration={duration_ms:.1f}ms"
         )
 
     def error(self, filepath: str, error_msg: str) -> None:
