@@ -1,6 +1,6 @@
 # code-memory
 
-<img src="assets/logo.png" alt="code-memory logo" width="128" height="128">
+<img src="assets/logo.png" alt="code-memory logo" width="100%">
 
 A deterministic, high-precision **code intelligence layer** exposed as a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server.
 
