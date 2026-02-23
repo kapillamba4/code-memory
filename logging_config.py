@@ -153,7 +153,7 @@ class IndexingLogger:
     def __init__(self, indexer_type: str):
         self.indexer_type = indexer_type
         self.logger = get_logger("indexing")
-        self.files_processed = 0
+        self.files_newly_indexed = 0
         self.items_indexed = 0
         self.files_unchanged = 0
         self.start_time: datetime | None = None
@@ -165,7 +165,7 @@ class IndexingLogger:
 
     def file_indexed(self, filepath: str, items: int = 1) -> None:
         """Log successful file indexing."""
-        self.files_processed += 1
+        self.files_newly_indexed += 1
         self.items_indexed += items
         self.logger.debug(f"Indexed {self.indexer_type}: {filepath} ({items} items)")
 
@@ -179,7 +179,7 @@ class IndexingLogger:
         duration_ms = (datetime.now() - self.start_time).total_seconds() * 1000 if self.start_time else 0
         self.logger.info(
             f"Completed {self.indexer_type} indexing: "
-            f"files={self.files_processed} items={self.items_indexed} "
+            f"files={self.files_newly_indexed} items={self.items_indexed} "
             f"unchanged={self.files_unchanged} duration={duration_ms:.1f}ms"
         )
 

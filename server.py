@@ -460,6 +460,10 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
 
             await ctx.report_progress(100, 100, f"Indexing complete! ({files_per_sec:.1f} files/s)")
 
+            # Get total indexed counts from database for cumulative stats
+            total_code_files = database.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+            total_doc_files = database.execute("SELECT COUNT(*) FROM doc_files").fetchone()[0]
+
             return {
                 "status": "ok",
                 "directory": str(directory_path),
@@ -469,14 +473,16 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
                     "total_files_processed": total_files,
                 },
                 "code": {
-                    "files_indexed": len(indexed),
+                    "files_newly_indexed": len(indexed),
                     "files_unchanged": len(skipped),
+                    "total_indexed_files": total_code_files,
                     "total_symbols": total_symbols,
                     "total_references": sum(r.get("references_indexed", 0) for r in indexed),
                 },
                 "documentation": {
-                    "files_indexed": len(doc_indexed),
+                    "files_newly_indexed": len(doc_indexed),
                     "files_unchanged": len(doc_skipped),
+                    "total_indexed_files": total_doc_files,
                     "total_chunks": total_chunks,
                     "docstrings_extracted": len(docstring_results),
                 },

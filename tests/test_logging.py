@@ -133,12 +133,12 @@ class TestToolLogger:
 class TestIndexingLogger:
     """Tests for IndexingLogger class."""
 
-    def test_tracks_files_processed(self):
-        """Test that files processed are tracked."""
+    def test_tracks_files_newly_indexed(self):
+        """Test that files newly indexed are tracked."""
         idx_logger = logging_config.IndexingLogger("test")
         idx_logger.file_indexed("file1.py", 3)
         idx_logger.file_indexed("file2.py", 2)
-        assert idx_logger.files_processed == 2
+        assert idx_logger.files_newly_indexed == 2
         assert idx_logger.items_indexed == 5
 
     def test_tracks_files_unchanged(self):

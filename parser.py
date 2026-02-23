@@ -597,19 +597,19 @@ def index_directory(dirpath: str, db, progress_callback=None) -> list[dict]:
     total_elapsed = time.perf_counter() - total_start
     total_symbols = sum(r.get("symbols_indexed", 0) for r in results)
     total_refs = sum(r.get("references_indexed", 0) for r in results)
-    files_indexed = sum(1 for r in results if not r.get("skipped"))
+    files_newly_indexed = sum(1 for r in results if not r.get("skipped"))
     files_unchanged = sum(1 for r in results if r.get("skipped") and not r.get("error"))
 
     if total_files > 0:
         files_per_sec = total_files / total_elapsed if total_elapsed > 0 else 0
         logger.info(
             "Indexed %d files (%d unchanged) in %.2fs (%.1f files/s) - %d symbols, %d references",
-            files_indexed, files_unchanged, total_elapsed, files_per_sec, total_symbols, total_refs
+            files_newly_indexed, files_unchanged, total_elapsed, files_per_sec, total_symbols, total_refs
         )
     else:
         logger.info(
             "Indexed %d files (%d unchanged) in %.2fs - %d symbols, %d references",
-            files_indexed, files_unchanged, total_elapsed, total_symbols, total_refs
+            files_newly_indexed, files_unchanged, total_elapsed, total_symbols, total_refs
         )
 
     return results
