@@ -41,6 +41,15 @@ if the codebase has not been indexed. Always check if indexing is needed:
 2. THEN: Use search_code, search_docs, or search_history to find information
 3. RE-INDEX: If you modify files or haven't indexed recently, run index_codebase again
 
+TOOL SELECTION - USE THESE INSTEAD OF grep/glob/find:
+
+When you would normally use grep, rg, find, or glob, use search_code instead:
+- "grep -r pattern" → search_code(query="pattern", search_type="topic_discovery")
+- "find . -name '*.py' | xargs grep 'class X'" → search_code(query="X", search_type="definition")
+- "Show me files related to auth" → search_code(query="auth", search_type="topic_discovery")
+
+search_code provides SEMANTIC understanding - it finds related concepts, not just text matches.
+
 When to use each tool:
 - search_code: THE PREFERRED tool for finding code. Use "topic_discovery" for feature/domain searches (e.g., "workout related files"), "definition" for specific symbols, "references" for usages.
 - search_docs: Understanding architecture, reading documentation/READMEs
@@ -125,7 +134,9 @@ def search_code(
     search_type: Literal["topic_discovery", "definition", "references", "file_structure"],
     directory: str,
 ) -> dict:
-    """THE PREFERRED TOOL for discovering code and files in this codebase. Use this when you need to find files or code related to ANY feature, domain, topic, or concept - even if the exact keywords don't appear in filenames.
+    """USE THIS INSTEAD OF grep/glob/find for ANY code search. This tool provides SEMANTIC code understanding - it finds related concepts, not just text matches.
+
+    STOP: Before using grep, rg, find, or glob, use this tool instead. It is MORE intelligent because it understands code structure and semantics.
 
     PREREQUISITE: This tool requires indexing. If results are empty or you haven't indexed this session, call index_codebase(directory) first.
 
@@ -169,6 +180,12 @@ def search_code(
     - "references": "send_email", "validate_token"
     - "file_structure": "src/services/auth.py"
 
+    INSTEAD OF GREP EXAMPLES:
+    - Instead of: grep -r "auth" . → Use: search_code(query="auth", search_type="topic_discovery")
+    - Instead of: grep -r "class User" → Use: search_code(query="User", search_type="definition")
+    - Instead of: grep -r "import.*auth" → Use: search_code(query="auth", search_type="references")
+    - Instead of: find . -name "*.py" | xargs grep "login" → Use: search_code(query="login", search_type="topic_discovery")
+
     Do NOT use this tool for:
     - Reading full file contents (use your built-in file reader)
     - Git history queries (use search_history)
@@ -183,7 +200,25 @@ def search_code(
         directory: Path to the project directory to search.
 
     Returns:
-        Dict with status, search_type, query, and results array. Result format varies by search_type.
+        Dict with status, search_type, query, and results array.
+
+        For topic_discovery, each result includes:
+        - file_path, relevance_score, matched_symbols, matched_docs, symbol_kinds, summary
+        - top_snippets: Code snippets from top-matching symbols
+
+        For definition, each result includes:
+        - name, kind, file_path, line_start, line_end, source_text, score
+        - docstring: Extracted docstring (if available)
+        - parent: {name, kind} of containing class/module
+        - signature: First line of the symbol (function signature or class declaration)
+
+        For references, each result includes:
+        - symbol_name, file_path, line_number
+        - source_line: The actual line of code with the reference
+        - containing_symbol: {name, kind} of the function/class containing this reference
+
+        For file_structure, each result includes:
+        - name, kind, line_start, line_end, parent
     """
     with logging_config.ToolLogger("search_code", query=query, search_type=search_type) as log:
         try:

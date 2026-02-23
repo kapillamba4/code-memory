@@ -156,7 +156,7 @@ def hybrid_search(query: str, db, top_k: int = 10) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def find_definition(symbol_name: str, db) -> list[dict]:
+def find_definition(symbol_name: str, db, include_context: bool = True) -> list[dict]:
     """Find where *symbol_name* is defined using hybrid search.
 
     Post-filters for exact name matches first; falls back to top hybrid
@@ -165,22 +165,89 @@ def find_definition(symbol_name: str, db) -> list[dict]:
     Args:
         symbol_name: The name of the symbol to find.
         db: An open ``sqlite3.Connection``.
+        include_context: If True, include docstrings and parent symbol info.
 
     Returns:
-        A list of result dicts.
+        A list of result dicts with enriched information.
     """
     results = hybrid_search(symbol_name, db, top_k=20)
 
     # Exact-match filter (case-sensitive)
     exact = [r for r in results if r["name"] == symbol_name]
-    if exact:
-        return exact
+    matched = exact if exact else results[:5]
 
-    # Fallback: return top results as best guesses
-    return results[:5]
+    if not include_context:
+        return matched
+
+    # Enrich results with docstrings and parent information
+    enriched = []
+    for r in matched:
+        symbol_id = r.get("symbol_id") or _get_symbol_id(r["name"], r["file_path"], db)
+        enriched_result = {
+            **r,
+            "docstring": None,
+            "parent": None,
+            "signature": _extract_signature(r.get("source_text", "")),
+        }
+
+        # Get parent symbol
+        if symbol_id:
+            parent_row = db.execute(
+                """
+                SELECT p.name, p.kind
+                FROM symbols s
+                LEFT JOIN symbols p ON p.id = s.parent_symbol_id
+                WHERE s.id = ?
+                """,
+                (symbol_id,),
+            ).fetchone()
+            if parent_row and parent_row[0]:
+                enriched_result["parent"] = {"name": parent_row[0], "kind": parent_row[1]}
+
+        # Get docstring from doc_chunks
+        doc_row = db.execute(
+            """
+            SELECT dc.content
+            FROM doc_chunks dc
+            JOIN doc_files df ON df.id = dc.doc_file_id
+            WHERE df.path = ? AND dc.line_start <= ? AND dc.line_end >= ?
+            AND df.doc_type = 'docstring'
+            LIMIT 1
+            """,
+            (r["file_path"], r["line_start"], r["line_start"]),
+        ).fetchone()
+        if doc_row:
+            enriched_result["docstring"] = doc_row[0]
+
+        enriched.append(enriched_result)
+
+    return enriched
 
 
-def find_references(symbol_name: str, db) -> list[dict]:
+def _get_symbol_id(name: str, file_path: str, db) -> int | None:
+    """Get symbol ID by name and file path."""
+    row = db.execute(
+        "SELECT id FROM symbols WHERE name = ? AND file_id = (SELECT id FROM files WHERE path = ?)",
+        (name, file_path),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _extract_signature(source_text: str) -> str | None:
+    """Extract the function/class signature from source text."""
+    if not source_text:
+        return None
+    lines = source_text.strip().split("\n")
+    if not lines:
+        return None
+    # Return first meaningful line (signature)
+    first_line = lines[0].strip()
+    if len(first_line) > 100:
+        return first_line[:100] + "..."
+    return first_line if first_line else None
+
+
+def find_references(symbol_name: str, db, include_context: bool = True) -> list[dict]:
     """Find all cross-references to *symbol_name*.
 
     Queries the ``references_`` table for exact matches.
@@ -188,9 +255,10 @@ def find_references(symbol_name: str, db) -> list[dict]:
     Args:
         symbol_name: The name of the symbol to find references for.
         db: An open ``sqlite3.Connection``.
+        include_context: If True, include source context and containing symbol.
 
     Returns:
-        A list of dicts with ``symbol_name``, ``file_path``, ``line_number``.
+        A list of dicts with enriched reference information.
     """
     rows = db.execute(
         """
@@ -203,10 +271,51 @@ def find_references(symbol_name: str, db) -> list[dict]:
         (symbol_name,),
     ).fetchall()
 
-    return [
-        {"symbol_name": r[0], "file_path": r[1], "line_number": r[2]}
-        for r in rows
-    ]
+    if not include_context:
+        return [
+            {"symbol_name": r[0], "file_path": r[1], "line_number": r[2]}
+            for r in rows
+        ]
+
+    # Enrich with context
+    enriched = []
+    for r in rows:
+        ref = {
+            "symbol_name": r[0],
+            "file_path": r[1],
+            "line_number": r[2],
+            "source_line": None,
+            "containing_symbol": None,
+        }
+
+        # Get the source line at this reference
+        try:
+            with open(r[1], "r") as f:
+                lines = f.readlines()
+                if 0 < r[2] <= len(lines):
+                    ref["source_line"] = lines[r[2] - 1].strip()
+        except Exception:
+            pass
+
+        # Find containing symbol
+        containing = db.execute(
+            """
+            SELECT s.name, s.kind
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = ?
+            AND s.line_start <= ? AND s.line_end >= ?
+            ORDER BY (s.line_end - s.line_start)
+            LIMIT 1
+            """,
+            (r[1], r[2], r[2]),
+        ).fetchone()
+        if containing:
+            ref["containing_symbol"] = {"name": containing[0], "kind": containing[1]}
+
+        enriched.append(ref)
+
+    return enriched
 
 
 def get_file_structure(file_path: str, db) -> list[dict]:
@@ -449,7 +558,7 @@ def _add_context_chunks(results: list[dict], db) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def discover_topic(topic_query: str, db, top_k: int = 15) -> list[dict]:
+def discover_topic(topic_query: str, db, top_k: int = 15, include_snippets: bool = True) -> list[dict]:
     """Discover files and code related to a high-level topic or feature.
 
     This function performs broad semantic search across both code symbols
@@ -465,6 +574,7 @@ def discover_topic(topic_query: str, db, top_k: int = 15) -> list[dict]:
                      Examples: "authentication", "workout tracking", "email notifications"
         db: An open ``sqlite3.Connection``.
         top_k: Maximum number of files to return (default 15).
+        include_snippets: If True, include code snippets for top symbols.
 
     Returns:
         A list of file-level results, each containing:
@@ -472,7 +582,9 @@ def discover_topic(topic_query: str, db, top_k: int = 15) -> list[dict]:
         - relevance_score: Combined semantic relevance score
         - matched_symbols: List of symbol names that matched the topic
         - matched_docs: List of doc section titles that matched
+        - symbol_kinds: Types of symbols found (function, class, etc.)
         - summary: Brief description of what in this file is relevant
+        - top_snippets: Code snippets from top-matching symbols (if include_snippets)
     """
     # Run parallel searches on both code symbols and documentation
     code_results = hybrid_search(topic_query, db, top_k=50)
@@ -492,10 +604,19 @@ def discover_topic(topic_query: str, db, top_k: int = 15) -> list[dict]:
                 "matched_symbols": [],
                 "matched_docs": [],
                 "symbol_kinds": set(),
+                "symbol_details": [],  # Store full details for snippets
             }
         file_aggregates[fp]["relevance_score"] += r.get("score", 0.5)
         file_aggregates[fp]["matched_symbols"].append(r.get("name", ""))
         file_aggregates[fp]["symbol_kinds"].add(r.get("kind", ""))
+        file_aggregates[fp]["symbol_details"].append({
+            "name": r.get("name"),
+            "kind": r.get("kind"),
+            "line_start": r.get("line_start"),
+            "line_end": r.get("line_end"),
+            "source_text": r.get("source_text"),
+            "score": r.get("score"),
+        })
 
     for r in doc_results:
         fp = r.get("source_file", "")
@@ -508,6 +629,7 @@ def discover_topic(topic_query: str, db, top_k: int = 15) -> list[dict]:
                 "matched_symbols": [],
                 "matched_docs": [],
                 "symbol_kinds": set(),
+                "symbol_details": [],
             }
         file_aggregates[fp]["relevance_score"] += r.get("score", 0.5)
         section = r.get("section_title", "")
@@ -531,13 +653,46 @@ def discover_topic(topic_query: str, db, top_k: int = 15) -> list[dict]:
 
         kinds = ", ".join(k for k in item["symbol_kinds"] if k)
 
-        results.append({
+        result = {
             "file_path": item["file_path"],
             "relevance_score": round(item["relevance_score"], 4),
             "matched_symbols": item["matched_symbols"][:10],
             "matched_docs": item["matched_docs"][:5],
             "symbol_kinds": kinds,
             "summary": f"Contains {kinds}: {symbol_summary}" if kinds else f"Related symbols: {symbol_summary}",
-        })
+        }
+
+        # Add top snippets if requested
+        if include_snippets and item["symbol_details"]:
+            # Sort by score and take top 2
+            top_symbols = sorted(
+                item["symbol_details"],
+                key=lambda x: x.get("score", 0) or 0,
+                reverse=True
+            )[:2]
+            result["top_snippets"] = [
+                {
+                    "name": s["name"],
+                    "kind": s["kind"],
+                    "line_range": f"{s['line_start']}-{s['line_end']}",
+                    "code": _truncate_code(s.get("source_text", ""), max_lines=15),
+                }
+                for s in top_symbols if s.get("source_text")
+            ]
+
+        results.append(result)
 
     return results
+
+
+def _truncate_code(source_text: str, max_lines: int = 15, max_chars: int = 500) -> str:
+    """Truncate source code to a reasonable preview size."""
+    if not source_text:
+        return ""
+    lines = source_text.strip().split("\n")
+    if len(lines) <= max_lines and len(source_text) <= max_chars:
+        return source_text.strip()
+    truncated = "\n".join(lines[:max_lines])
+    if len(truncated) > max_chars:
+        truncated = truncated[:max_chars]
+    return truncated + "\n// ... (truncated)"
