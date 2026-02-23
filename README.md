@@ -1,5 +1,7 @@
 # code-memory
 
+<img src="assets/logo.png" alt="code-memory logo" width="128" height="128">
+
 A deterministic, high-precision **code intelligence layer** exposed as a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server.
 
 - **No API key required** — runs entirely locally with sentence-transformers
