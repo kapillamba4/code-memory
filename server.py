@@ -12,9 +12,10 @@ architecture:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Literal
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 import db as db_mod
 import doc_parser as doc_parser_mod
@@ -275,7 +276,7 @@ def search_code(
 
 # ── Tool 2: index_codebase ────────────────────────────────────────────────
 @mcp.tool()
-def index_codebase(directory: str) -> dict:
+async def index_codebase(directory: str, ctx: Context) -> dict:
     """YOU MUST CALL THIS TOOL FIRST before using search_code or search_docs. Use this tool to build the searchable index that powers all other code intelligence features.
 
     TRIGGER: Call this tool immediately when:
@@ -312,11 +313,36 @@ def index_codebase(directory: str) -> dict:
 
             database = db_mod.get_db(str(directory_path))
 
-            # Index code files
+            # Report initial progress
+            await ctx.report_progress(0, 100, "Starting indexing...")
+
+            # Create progress callback that schedules progress updates on the event loop
+            loop = asyncio.get_running_loop()
+            progress_state = {"current": 0, "total": 0, "phase": "code"}
+
+            def sync_progress_callback(current: int, total: int, message: str):
+                """Sync callback that schedules async progress reporting."""
+                progress_state["current"] = current
+                progress_state["total"] = total
+                # Schedule the async progress report on the event loop
+                asyncio.run_coroutine_threadsafe(
+                    ctx.report_progress(current, total, message),
+                    loop
+                )
+
+            # Index code files in a thread to allow progress reporting
             code_logger = logging_config.IndexingLogger("code")
             code_logger.start(str(directory_path))
 
-            code_results = parser_mod.index_directory(str(directory_path), database)
+            await ctx.report_progress(0, 100, "Scanning code files...")
+
+            code_results = await asyncio.to_thread(
+                parser_mod.index_directory,
+                str(directory_path),
+                database,
+                sync_progress_callback
+            )
+
             for r in code_results:
                 if r.get("skipped"):
                     code_logger.file_skipped(r.get("file", "unknown"), r.get("reason", "unknown"))
@@ -331,7 +357,21 @@ def index_codebase(directory: str) -> dict:
             doc_logger = logging_config.IndexingLogger("documentation")
             doc_logger.start(str(directory_path))
 
-            doc_results = doc_parser_mod.index_doc_directory(str(directory_path), database)
+            # Calculate progress offset for doc indexing
+            code_file_count = len(code_results)
+            doc_progress_offset = code_file_count
+
+            await ctx.report_progress(code_file_count, code_file_count, "Scanning documentation files...")
+
+            doc_results = await asyncio.to_thread(
+                doc_parser_mod.index_doc_directory,
+                str(directory_path),
+                database,
+                sync_progress_callback,
+                doc_progress_offset,
+                code_file_count  # Will be updated by callback
+            )
+
             for r in doc_results:
                 if r.get("skipped"):
                     doc_logger.file_skipped(r.get("file", "unknown"), r.get("reason", "unknown"))
@@ -343,11 +383,17 @@ def index_codebase(directory: str) -> dict:
             doc_skipped = [r for r in doc_results if r.get("skipped")]
 
             # Extract docstrings from indexed code
-            docstring_results = doc_parser_mod.extract_docstrings_from_code(database)
+            await ctx.report_progress(0, 0, "Extracting docstrings...")
+            docstring_results = await asyncio.to_thread(
+                doc_parser_mod.extract_docstrings_from_code,
+                database
+            )
 
             total_symbols = sum(r.get("symbols_indexed", 0) for r in indexed)
             total_chunks = sum(r.get("chunks_indexed", 0) for r in doc_indexed)
             log.set_result_count(total_symbols + total_chunks + len(docstring_results))
+
+            await ctx.report_progress(100, 100, "Indexing complete!")
 
             return {
                 "status": "ok",

@@ -337,12 +337,15 @@ def index_doc_file(
     }
 
 
-def index_doc_directory(dirpath: str, db) -> list[dict]:
+def index_doc_directory(dirpath: str, db, progress_callback=None, progress_offset: int = 0, progress_total: int = 0) -> list[dict]:
     """Recursively index all documentation in a directory.
 
     Args:
         dirpath: Root directory to search.
         db: Database connection.
+        progress_callback: Optional callback(current, total, message) for progress updates.
+        progress_offset: Offset to add to current count (for combined progress with code indexing).
+        progress_total: Total files across all indexing phases.
 
     Returns:
         List of result dicts from index_doc_file.
@@ -350,16 +353,23 @@ def index_doc_directory(dirpath: str, db) -> list[dict]:
     abs_dir = os.path.abspath(dirpath)
     results = []
 
+    # First pass: count files
+    doc_files = []
     for root, dirs, files in os.walk(abs_dir):
-        # Skip unwanted directories
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
-
         for filename in files:
             ext = os.path.splitext(filename)[1].lower()
             if ext in DOC_EXTENSIONS:
-                filepath = os.path.join(root, filename)
-                result = index_doc_file(filepath, db)
-                results.append(result)
+                doc_files.append(os.path.join(root, filename))
+
+    # Index files with progress reporting
+    for i, filepath in enumerate(doc_files):
+        result = index_doc_file(filepath, db)
+        results.append(result)
+
+        if progress_callback:
+            current = progress_offset + i + 1
+            progress_callback(current, progress_total, f"Indexing docs: {os.path.basename(filepath)}")
 
     return results
 

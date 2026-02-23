@@ -451,7 +451,7 @@ def index_file(filepath: str, db) -> dict:
 # Directory indexer
 # ---------------------------------------------------------------------------
 
-def index_directory(dirpath: str, db) -> list[dict]:
+def index_directory(dirpath: str, db, progress_callback=None) -> list[dict]:
     """Recursively index all source files under *dirpath*.
 
     Skips directories in ``_SKIP_DIRS``, files matching ``.gitignore`` patterns
@@ -461,6 +461,7 @@ def index_directory(dirpath: str, db) -> list[dict]:
     Args:
         dirpath: Root directory to scan.
         db: An open ``sqlite3.Connection`` from ``db.get_db()``.
+        progress_callback: Optional callback(current, total, message) for progress updates.
 
     Returns:
         A list of per-file result dicts (see :func:`index_file`).
@@ -475,6 +476,28 @@ def index_directory(dirpath: str, db) -> list[dict]:
     gitignore = GitignoreMatcher(dirpath)
     logger.debug("Initialized gitignore matcher for %s", dirpath)
 
+    # First pass: count total files for progress reporting
+    total_files = 0
+    file_list = []
+    for root, dirs, files in os.walk(dirpath, topdown=True):
+        rel_root = os.path.relpath(root, dirpath)
+        if rel_root != ".":
+            gitignore.check_dir_for_gitignore(root, rel_root)
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.endswith(".egg-info")
+                   and not gitignore.should_skip(os.path.join(rel_root, d) if rel_root != "." else d, is_dir=True)]
+        for fname in sorted(files):
+            rel_path = os.path.join(rel_root, fname) if rel_root != "." else fname
+            if gitignore.should_skip(rel_path, is_dir=False):
+                continue
+            ext = os.path.splitext(fname)[1].lower()
+            if ext in _SOURCE_EXTENSIONS or _load_language(ext) is not None:
+                file_list.append(os.path.join(root, fname))
+                total_files += 1
+
+    # Reset gitignore for actual indexing pass
+    gitignore = GitignoreMatcher(dirpath)
+
+    files_processed = 0
     for root, dirs, files in os.walk(dirpath, topdown=True):
         rel_root = os.path.relpath(root, dirpath)
 
@@ -518,6 +541,11 @@ def index_directory(dirpath: str, db) -> list[dict]:
                     "skipped": True,
                     "error": True,
                 })
+
+            # Report progress
+            files_processed += 1
+            if progress_callback:
+                progress_callback(files_processed, total_files, f"Indexing code: {fname}")
 
     # Log performance summary
     total_elapsed = time.perf_counter() - total_start

@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
+
+class MockContext:
+    """Mock MCP Context for testing."""
+
+    def __init__(self):
+        self.report_progress = AsyncMock()
+
 
 class TestSearchCodeValidation:
     """Tests for search_code tool input validation."""
@@ -84,8 +93,16 @@ class TestIndexCodebaseValidation:
 
     def test_nonexistent_directory_returns_error(self):
         """Test that nonexistent directory returns structured error."""
+        import asyncio
+
         import server
-        result = server.index_codebase("/nonexistent/directory")
+        ctx = MockContext()
+
+        async def run_test():
+            result = await server.index_codebase("/nonexistent/directory", ctx)
+            return result
+
+        result = asyncio.run(run_test())
         assert result.get("error") is True
         assert "ValidationError" in result.get("error_type", "")
 
