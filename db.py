@@ -291,7 +291,7 @@ def get_db(project_dir: str) -> sqlite3.Connection:
     """
     import os
     db_path = os.path.join(os.path.abspath(project_dir), "code_memory.db")
-    db = sqlite3.connect(db_path)
+    db = sqlite3.connect(db_path, check_same_thread=False)
     db.enable_load_extension(True)
     sqlite_vec.load(db)
     db.enable_load_extension(False)
