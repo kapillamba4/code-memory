@@ -29,6 +29,21 @@ import validation as val
 logger = logging_config.setup_logging()
 tool_logger = logging_config.get_logger("tools")
 
+# ── Lazy warmup state ────────────────────────────────────────────────────
+_warmup_done = False
+
+
+def ensure_model_warmup() -> None:
+    """Lazily warm up the embedding model on first index_codebase call."""
+    global _warmup_done
+    if _warmup_done:
+        return
+    logger.info(f"Using embedding model: {db_mod.EMBEDDING_MODEL_NAME}")
+    logger.info("Warming up embedding model...")
+    db_mod.warmup_embedding_model()
+    logger.info("Embedding model ready")
+    _warmup_done = True
+
 # ── Initialize the FastMCP server ────────────────────────────────────────
 mcp = FastMCP(
     "code-memory",
@@ -347,6 +362,9 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
         Summary with files_indexed, total_symbols, total_chunks, and details.
     """
     import time
+
+    # Lazily warm up embedding model on first call
+    ensure_model_warmup()
 
     with logging_config.ToolLogger("index_codebase", directory=directory) as log:
         try:
@@ -684,12 +702,7 @@ def search_history(
 # ── Entrypoint ────────────────────────────────────────────────────────────
 def main():
     """Entry point for the MCP server when installed as a package."""
-    # Warm up embedding model to avoid cold-start latency
-    logger.info(f"Using embedding model: {db_mod.EMBEDDING_MODEL_NAME}")
-    logger.info("Warming up embedding model...")
-    db_mod.warmup_embedding_model()
-    logger.info("Embedding model ready")
-
+    # Warmup is now done lazily on first index_codebase call
     mcp.run()
 
 
