@@ -83,18 +83,36 @@ def _detect_device() -> str:
     return 'cpu'
 
 
-def get_embedding_model():
+def get_embedding_model(force_cpu: bool = False):
     """Lazy-load and cache the sentence-transformers model.
 
     Automatically uses GPU acceleration when available (CUDA or MPS).
     Set CODE_MEMORY_DEVICE env var to 'cuda', 'mps', 'cpu', or 'auto'.
+
+    Args:
+        force_cpu: If True, force the model to use CPU even if GPU is available.
+                   This is useful when GPU memory is constrained (CUDA OOM).
+                   If the model is already loaded on GPU, it will be moved to CPU.
     """
     global _model, _embedding_dim
+
+    # Handle force_cpu after model is already loaded
+    if _model is not None and force_cpu:
+        current_device = str(_model.device)
+        if 'cuda' in current_device or 'mps' in current_device:
+            logger.info(f"Moving embedding model from {current_device} to CPU (force_cpu=True)")
+            _model = _model.to('cpu')
+        return _model
+
     if _model is None:
         from sentence_transformers import SentenceTransformer
 
-        # Detect and use the best available device
-        device = _detect_device()
+        # Detect and use the best available device, or force CPU
+        if force_cpu:
+            device = 'cpu'
+            logger.info("Using CPU for embedding computation (force_cpu=True)")
+        else:
+            device = _detect_device()
 
         # Use bundled model if available (PyInstaller build)
         model_path = _BUNDLED_MODEL_PATH if _BUNDLED_MODEL_PATH else EMBEDDING_MODEL_NAME
@@ -175,13 +193,17 @@ def embed_texts_batch(
     return [v.tolist() for v in vectors]
 
 
-def warmup_embedding_model() -> None:
+def warmup_embedding_model(force_cpu: bool = False) -> None:
     """Pre-load and warm up the embedding model.
 
     Call this at server startup to avoid cold-start latency on first search.
     The warmup encodes a dummy string to initialize internal tensors.
+
+    Args:
+        force_cpu: If True, force the model to use CPU even if GPU is available.
+                   Useful when GPU memory is constrained (CUDA OOM).
     """
-    model = get_embedding_model()
+    model = get_embedding_model(force_cpu=force_cpu)
     # Warmup encode to initialize lazy-loaded components
     model.encode("nl2code: warmup", normalize_embeddings=True, show_progress_bar=False)
     logger.info("Embedding model warmed up")

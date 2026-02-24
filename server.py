@@ -34,14 +34,22 @@ tool_logger = logging_config.get_logger("tools")
 _warmup_done = False
 
 
-def ensure_model_warmup() -> None:
-    """Lazily warm up the embedding model on first index_codebase call."""
+def ensure_model_warmup(force_cpu: bool = False) -> None:
+    """Lazily warm up the embedding model on first index_codebase call.
+
+    Args:
+        force_cpu: If True, force the model to use CPU even if GPU is available.
+                   Useful when GPU memory is constrained (CUDA OOM).
+    """
     global _warmup_done
     if _warmup_done:
+        # If model is already warmed up but we need CPU, move it
+        if force_cpu:
+            db_mod.get_embedding_model(force_cpu=True)
         return
     logger.info(f"Using embedding model: {db_mod.EMBEDDING_MODEL_NAME}")
     logger.info("Warming up embedding model...")
-    db_mod.warmup_embedding_model()
+    db_mod.warmup_embedding_model(force_cpu=force_cpu)
     logger.info("Embedding model ready")
     _warmup_done = True
 
@@ -352,7 +360,7 @@ def search_code(
 
 # ── Tool 2: index_codebase ────────────────────────────────────────────────
 @mcp.tool()
-async def index_codebase(directory: str, ctx: Context) -> api_types.IndexCodebaseResponse | api_types.ErrorResponse:
+async def index_codebase(directory: str, ctx: Context, cpu: bool = False) -> api_types.IndexCodebaseResponse | api_types.ErrorResponse:
     """YOU MUST CALL THIS TOOL FIRST before using search_code or search_docs. Use this tool to build the searchable index that powers all other code intelligence features.
 
     TRIGGER: Call this tool immediately when:
@@ -379,6 +387,9 @@ async def index_codebase(directory: str, ctx: Context) -> api_types.IndexCodebas
 
     Args:
         directory: The root directory to index. Must be a valid path.
+        cpu: If True, force CPU-only mode for embedding generation.
+             Use this when GPU memory is unavailable or constrained (CUDA OOM).
+             Default is False (auto-detect and use GPU if available).
 
     Returns:
         Summary with files_indexed, total_symbols, total_chunks, and details.
@@ -386,7 +397,7 @@ async def index_codebase(directory: str, ctx: Context) -> api_types.IndexCodebas
     import time
 
     # Lazily warm up embedding model on first call
-    ensure_model_warmup()
+    ensure_model_warmup(force_cpu=cpu)
 
     with logging_config.ToolLogger("index_codebase", directory=directory) as log:
         try:
