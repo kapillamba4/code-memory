@@ -2,8 +2,13 @@
 
 <img src="assets/logo.png" alt="code-memory logo" width="100%">
 
+[![Zero Telemetry](https://img.shields.io/badge/Zero-Telemetry-brightgreen)](#privacy--security)
+[![No API Key](https://img.shields.io/badge/No-API_Key-blue)](#why-code-memory)
+[![Offline First](https://img.shields.io/badge/Offline-First-orange)](#air-gapped--offline-support)
+
 A deterministic, high-precision **code intelligence layer** exposed as a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server.
 
+- **Zero telemetry** — your code never leaves your machine
 - **No API key required** — runs entirely locally with sentence-transformers
 - **1 min setup** — just `uvx code-memory` and you're ready
 - **Token saving by 50%** — precise code retrieval instead of dumping entire files
@@ -335,6 +340,48 @@ Indexing generates embeddings using a local sentence-transformers model. The fir
 ### Embedding model errors
 
 Ensure you have enough disk space and memory. The `jina-code-embeddings-0.5b` model requires ~1GB RAM when loaded.
+
+## Privacy & Security
+
+**Your code never leaves your machine.** Unlike cloud-based code intelligence tools, code-memory runs entirely locally:
+
+- **Zero telemetry** — no usage data, analytics, or tracking
+- **Zero external API calls** — all processing happens in-process
+- **Zero cloud dependencies** — works without internet (after initial setup)
+- **Your data stays local** — indexes stored in local SQLite database
+
+This makes code-memory ideal for:
+- Proprietary and confidential codebases
+- Security-conscious organizations
+- Air-gapped development environments
+- Privacy-focused developers
+
+See [COMPARISON.md](COMPARISON.md) for a detailed comparison with cloud-based alternatives.
+
+## Air-gapped & Offline Support
+
+code-memory works in completely isolated environments:
+
+### Method 1: Pre-built Binary + Cached Model
+
+1. On a connected machine, run code-memory once to cache the embedding model:
+   ```bash
+   uvx code-memory
+   # Model downloads to ~/.cache/huggingface/
+   ```
+
+2. Transfer to air-gapped machine:
+   - Standalone binary from [GitHub Releases](https://github.com/kapillamba4/code-memory/releases)
+   - Model cache directory (`~/.cache/huggingface/hub/models--*`)
+
+3. Run on air-gapped machine — no network required.
+
+### Method 2: Offline pip Install
+
+1. Download the wheel from PyPI on a connected machine
+2. Transfer and install: `pip install code-memory-*.whl`
+3. Pre-cache the model as above
+4. Run offline
 
 ## Roadmap
 
