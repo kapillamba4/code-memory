@@ -52,16 +52,7 @@ jobs:
           pip install -e .
 
       - name: Download and bundle embedding model
-        run: |
-          python -c "
-          from sentence_transformers import SentenceTransformer
-          import os
-          model = SentenceTransformer('nomic-ai/nomic-embed-text-v1.5', trust_remote_code=True)
-          # Save to bundled_model directory for PyInstaller
-          model.save('bundled_model')
-          print(f'Model saved to bundled_model/')
-          print(f'Files: {os.listdir(\"bundled_model\")}')
-          "
+        run: python scripts/download_model.py
 
       - name: Build binary with PyInstaller
         run: |
