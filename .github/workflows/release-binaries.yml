@@ -14,7 +14,7 @@ env:
 
 jobs:
   build:
-    name: Build ${{ matrix.os }}
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -23,7 +23,7 @@ jobs:
           - os: ubuntu-latest
             target: linux-x86_64
             ext: ''
-          - os: macos-latest
+          - os: macos-13
             target: macos-x86_64
             ext: ''
           - os: macos-latest
@@ -51,20 +51,20 @@ jobs:
         run: |
           pip install -e .
 
-      - name: Download embedding model (cache for offline use)
+      - name: Download and bundle embedding model
         run: |
-          python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('jinaai/jina-code-embeddings-0.5b', trust_remote_code=True)"
+          python -c "
+          from sentence_transformers import SentenceTransformer
+          import os
+          model = SentenceTransformer('nomic-ai/nomic-embed-text-v1.5', trust_remote_code=True)
+          # Save to bundled_model directory for PyInstaller
+          model.save('bundled_model')
+          print(f'Model saved to bundled_model/')
+          print(f'Files: {os.listdir(\"bundled_model\")}')
+          "
 
-      - name: Build binary with PyInstaller (Linux/Windows)
-        if: matrix.os != 'macos-latest' || matrix.target == 'macos-x86_64'
+      - name: Build binary with PyInstaller
         run: |
-          pyinstaller --clean code-memory.spec
-
-      - name: Build binary with PyInstaller (macOS ARM64)
-        if: matrix.os == 'macos-latest' && matrix.target == 'macos-arm64'
-        run: |
-          # Install and use ARM64 Python via pyenv for native ARM build
-          # Note: GitHub's macos-latest runners are ARM64 as of late 2024
           pyinstaller --clean code-memory.spec
 
       - name: Rename binary
@@ -90,18 +90,35 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: code-memory-*
+          merge-multiple: false
 
-      - name: List artifacts
-        run: ls -la artifacts/
+      - name: List artifacts structure
+        run: |
+          echo "=== Artifacts directory structure ==="
+          find artifacts -type f -ls
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release_assets
+          # Copy all binaries to release_assets with correct names
+          for dir in artifacts/code-memory-*/; do
+            if [ -d "$dir" ]; then
+              target=$(basename "$dir")
+              if [ -f "${dir}${target}" ]; then
+                cp "${dir}${target}" "release_assets/${target}"
+              elif [ -f "${dir}${target}.exe" ]; then
+                cp "${dir}${target}.exe" "release_assets/${target}.exe"
+              fi
+            fi
+          done
+          echo "=== Release assets ==="
+          ls -la release_assets/
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/code-memory-linux-x86_64/code-memory-linux-x86_64
-            artifacts/code-memory-macos-x86_64/code-memory-macos-x86_64
-            artifacts/code-memory-macos-arm64/code-memory-macos-arm64
-            artifacts/code-memory-windows-x86_64/code-memory-windows-x86_64.exe
-          fail_on_unmatched_files: false
+          files: release_assets/*
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

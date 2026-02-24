@@ -75,6 +75,11 @@ hidden_imports.extend(tree_sitter_languages)
 # Collect data files
 datas = []
 
+# Include bundled embedding model if it exists
+bundled_model_path = PROJECT_ROOT / 'bundled_model'
+if bundled_model_path.exists():
+    datas.append((str(bundled_model_path), 'bundled_model'))
+
 # Collect tree-sitter native libraries
 for lang in tree_sitter_languages:
     try:

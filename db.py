@@ -36,6 +36,14 @@ _embedding_dim = None
 DEFAULT_EMBEDDING_MODEL = "nomic-ai/nomic-embed-text-v1.5"
 EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
 
+# Check for bundled model (used in PyInstaller builds)
+import sys
+
+_BUNDLED_MODEL_PATH = None
+if getattr(sys, 'frozen', False):
+    # Running as PyInstaller bundle
+    _BUNDLED_MODEL_PATH = os.path.join(sys._MEIPASS, 'bundled_model')
+
 
 def get_embedding_model():
     """Lazy-load and cache the sentence-transformers model."""
@@ -43,8 +51,10 @@ def get_embedding_model():
     if _model is None:
         from sentence_transformers import SentenceTransformer
 
+        # Use bundled model if available (PyInstaller build)
+        model_path = _BUNDLED_MODEL_PATH if _BUNDLED_MODEL_PATH else EMBEDDING_MODEL_NAME
         _model = SentenceTransformer(
-            EMBEDDING_MODEL_NAME, trust_remote_code=True
+            model_path, trust_remote_code=True
         )
         # Cache the embedding dimension from the model
         _embedding_dim = _model.get_sentence_embedding_dimension()

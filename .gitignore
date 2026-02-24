@@ -6,6 +6,7 @@ __pycache__/
 dist/
 build/
 *.egg
+bundled_model/
 
 # ── Virtual environments ──────────────────────────────────────────────
 .venv/
