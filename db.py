@@ -41,6 +41,14 @@ EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL
 # Options: 'cuda', 'mps', 'cpu', or 'auto' (default)
 CODE_MEMORY_DEVICE = os.environ.get("CODE_MEMORY_DEVICE", "auto")
 
+# Cross-encoder reranking - enabled by default for improved precision
+# Set CODE_MEMORY_RERANK=false to disable if latency is a concern
+CODE_MEMORY_RERANK = os.environ.get("CODE_MEMORY_RERANK", "true").lower() in ("true", "1", "yes")
+
+# Default cross-encoder model for reranking
+DEFAULT_RERANK_MODEL = "BAAI/bge-reranker-base"
+RERANK_MODEL_NAME = os.environ.get("RERANK_MODEL", DEFAULT_RERANK_MODEL)
+
 # Check for bundled model (used in PyInstaller builds)
 _BUNDLED_MODEL_PATH = None
 if getattr(sys, 'frozen', False):
@@ -207,6 +215,107 @@ def warmup_embedding_model(force_cpu: bool = False) -> None:
     # Warmup encode to initialize lazy-loaded components
     model.encode("nl2code: warmup", normalize_embeddings=True, show_progress_bar=False)
     logger.info("Embedding model warmed up")
+
+
+# ---------------------------------------------------------------------------
+# Cross-encoder reranking model (lazy-loaded singleton)
+# ---------------------------------------------------------------------------
+
+_rerank_model = None
+
+
+def get_rerank_model():
+    """Lazy-load and cache the cross-encoder reranking model.
+
+    Only loads the model if CODE_MEMORY_RERANK is enabled.
+    Uses the same device as the embedding model.
+
+    Returns:
+        CrossEncoder model instance, or None if reranking is disabled.
+    """
+    global _rerank_model
+
+    if not CODE_MEMORY_RERANK:
+        return None
+
+    if _rerank_model is None:
+        try:
+            from sentence_transformers import CrossEncoder
+
+            # Use the same device as the embedding model
+            device = _detect_device() if _model is None else str(_model.device).split(':')[0]
+
+            logger.info(f"Loading cross-encoder reranking model: {RERANK_MODEL_NAME}")
+            _rerank_model = CrossEncoder(RERANK_MODEL_NAME, device=device)
+            logger.info(f"Cross-encoder model loaded on {device}")
+        except Exception as e:
+            logger.warning(f"Failed to load cross-encoder model: {e}. Reranking disabled.")
+            return None
+
+    return _rerank_model
+
+
+def rerank_results(query: str, results: list[dict], top_k: int | None = None) -> list[dict]:
+    """Rerank search results using cross-encoder for improved precision.
+
+    Cross-encoders process query-document pairs jointly, producing more accurate
+    relevance scores than bi-encoders alone.
+
+    Args:
+        query: The original search query.
+        results: List of search result dicts, each containing at least 'source_text'
+                 or 'content' field for reranking.
+        top_k: Optional number of top results to return after reranking.
+               If None, returns all results in new order.
+
+    Returns:
+        Reranked list of results sorted by cross-encoder relevance scores.
+        If reranking fails or is disabled, returns original results unchanged.
+    """
+    if not results:
+        return results
+
+    model = get_rerank_model()
+    if model is None:
+        return results[:top_k] if top_k else results
+
+    try:
+        # Build query-document pairs for cross-encoder
+        pairs = []
+        for r in results:
+            # Use source_text for code, content for documentation
+            doc_text = r.get("source_text") or r.get("content", "")
+            if doc_text:
+                # Truncate long documents to avoid token limit issues
+                if len(doc_text) > 2000:
+                    doc_text = doc_text[:2000]
+                pairs.append([query, doc_text])
+            else:
+                pairs.append([query, ""])  # Fallback for empty content
+
+        # Get cross-encoder scores
+        scores = model.predict(pairs, show_progress_bar=False)
+
+        # Attach scores and sort by descending relevance
+        for i, r in enumerate(results):
+            r["_rerank_score"] = float(scores[i])
+
+        reranked = sorted(results, key=lambda x: x.get("_rerank_score", 0), reverse=True)
+
+        # Clean up internal score from results
+        for r in reranked:
+            r.pop("_rerank_score", None)
+
+        return reranked[:top_k] if top_k else reranked
+
+    except Exception as e:
+        logger.warning(f"Reranking failed: {e}. Returning original results.")
+        return results[:top_k] if top_k else results
+
+
+def is_reranking_enabled() -> bool:
+    """Check if cross-encoder reranking is enabled and model is available."""
+    return CODE_MEMORY_RERANK and get_rerank_model() is not None
 
 
 # ---------------------------------------------------------------------------

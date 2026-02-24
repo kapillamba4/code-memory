@@ -96,20 +96,23 @@ def _vector_search(query: str, db, top_k: int = 50) -> list[dict]:
     ]
 
 
-def hybrid_search(query: str, db, top_k: int = 10) -> list[dict]:
+def hybrid_search(query: str, db, top_k: int = 10, rerank: bool = True) -> list[dict]:
     """Hybrid BM25 + vector search with Reciprocal Rank Fusion.
 
     Runs both retrieval legs independently, then merges their ranked lists
     using RRF:  ``rrf_score(d) = Σ 1 / (k + rank(d))``  where ``k = 60``.
 
+    Optionally reranks results using a cross-encoder for improved precision.
+
     Args:
         query: Free-text search query.
         db: An open ``sqlite3.Connection`` from ``db.get_db()``.
         top_k: Number of results to return.
+        rerank: If True (default), apply cross-encoder reranking when available.
 
     Returns:
-        A list of result dicts sorted by descending RRF score, including
-        match_reason, match_highlights, and confidence.
+        A list of result dicts sorted by descending RRF score (or rerank score),
+        including match_reason, match_highlights, and confidence.
     """
     bm25_results = _bm25_search(query, db, top_k=50)
     vec_results = _vector_search(query, db, top_k=50)
@@ -191,6 +194,10 @@ def hybrid_search(query: str, db, top_k: int = 10) -> list[dict]:
 
         results.append(result)
 
+    # Apply cross-encoder reranking for improved precision
+    if rerank and db_mod.is_reranking_enabled():
+        results = db_mod.rerank_results(query, results, top_k=top_k)
+
     return results
 
 
@@ -258,7 +265,8 @@ def _simple_highlights(query: str, source_text: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def find_definition(symbol_name: str, db, include_context: bool = True) -> list[dict]:
+def find_definition(symbol_name: str, db, include_context: bool = True,
+                    rerank: bool = True) -> list[dict]:
     """Find where *symbol_name* is defined using hybrid search.
 
     Post-filters for exact name matches first; falls back to top hybrid
@@ -268,11 +276,12 @@ def find_definition(symbol_name: str, db, include_context: bool = True) -> list[
         symbol_name: The name of the symbol to find.
         db: An open ``sqlite3.Connection``.
         include_context: If True, include docstrings and parent symbol info.
+        rerank: If True (default), apply cross-encoder reranking when available.
 
     Returns:
         A list of result dicts with enriched information.
     """
-    results = hybrid_search(symbol_name, db, top_k=20)
+    results = hybrid_search(symbol_name, db, top_k=20, rerank=rerank)
 
     # Exact-match filter (case-sensitive)
     exact = [r for r in results if r["name"] == symbol_name]
@@ -539,7 +548,8 @@ def _doc_vector_search(query: str, db, top_k: int = 50) -> list[dict]:
 
 
 def search_documentation(query: str, db, top_k: int = 10,
-                         include_context: bool = False) -> list[dict]:
+                         include_context: bool = False,
+                         rerank: bool = True) -> list[dict]:
     """Perform hybrid search over documentation chunks.
 
     Uses BM25 + vector search with Reciprocal Rank Fusion.
@@ -549,6 +559,7 @@ def search_documentation(query: str, db, top_k: int = 10,
         db: Database connection.
         top_k: Maximum results to return.
         include_context: If True, include adjacent chunks for context.
+        rerank: If True (default), apply cross-encoder reranking when available.
 
     Returns:
         List of matching chunks with source attribution and RRF scores.
@@ -592,6 +603,10 @@ def search_documentation(query: str, db, top_k: int = 10,
         {**details[cid], "score": round(score, 6)}
         for cid, score in ranked
     ]
+
+    # Apply cross-encoder reranking for improved precision
+    if rerank and db_mod.is_reranking_enabled():
+        results = db_mod.rerank_results(query, results, top_k=top_k)
 
     # Optionally include adjacent chunks for context
     if include_context and results:
@@ -660,7 +675,8 @@ def _add_context_chunks(results: list[dict], db) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def discover_topic(topic_query: str, db, top_k: int = 15, include_snippets: bool = True) -> list[dict]:
+def discover_topic(topic_query: str, db, top_k: int = 15, include_snippets: bool = True,
+                   rerank: bool = True) -> list[dict]:
     """Discover files and code related to a high-level topic or feature.
 
     This function performs broad semantic search across code symbols to find
@@ -680,6 +696,7 @@ def discover_topic(topic_query: str, db, top_k: int = 15, include_snippets: bool
         db: An open ``sqlite3.Connection``.
         top_k: Maximum number of files to return (default 15).
         include_snippets: If True, include code snippets for top symbols.
+        rerank: If True (default), apply cross-encoder reranking when available.
 
     Returns:
         A list of file-level results, each containing:
@@ -691,7 +708,7 @@ def discover_topic(topic_query: str, db, top_k: int = 15, include_snippets: bool
         - top_snippets: Code snippets from top-matching symbols (if include_snippets)
     """
     # Search code symbols only (documentation is handled by search_docs)
-    code_results = hybrid_search(topic_query, db, top_k=50)
+    code_results = hybrid_search(topic_query, db, top_k=50, rerank=rerank)
 
     # Aggregate by file path, collecting all matched items
     file_aggregates: dict[str, dict] = {}
