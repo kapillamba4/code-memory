@@ -92,6 +92,12 @@ code-memory-windows-x86_64.exe
 - Python ≥ 3.13
 - [`uv`](https://docs.astral.sh/uv/) package manager (recommended) or pip
 
+Install uv if you don't have it:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
 ### Install & Run
 
 ```bash
