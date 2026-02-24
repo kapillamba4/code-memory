@@ -37,6 +37,10 @@ _embedding_dim = None
 DEFAULT_EMBEDDING_MODEL = "nomic-ai/nomic-embed-text-v1.5"
 EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
 
+# Device selection - can be overridden via CODE_MEMORY_DEVICE environment variable
+# Options: 'cuda', 'mps', 'cpu', or 'auto' (default)
+CODE_MEMORY_DEVICE = os.environ.get("CODE_MEMORY_DEVICE", "auto")
+
 # Check for bundled model (used in PyInstaller builds)
 _BUNDLED_MODEL_PATH = None
 if getattr(sys, 'frozen', False):
@@ -44,17 +48,65 @@ if getattr(sys, 'frozen', False):
     _BUNDLED_MODEL_PATH = os.path.join(sys._MEIPASS, 'bundled_model')
 
 
+def _detect_device() -> str:
+    """Detect the best available device for embedding computation.
+
+    Priority: CUDA > MPS (Apple Silicon) > CPU
+
+    Returns:
+        Device string: 'cuda', 'mps', or 'cpu'
+    """
+    import torch
+
+    device_override = CODE_MEMORY_DEVICE.lower()
+
+    # Handle manual override
+    if device_override in ('cuda', 'mps', 'cpu'):
+        if device_override == 'cuda' and not torch.cuda.is_available():
+            logger.warning("CUDA requested but not available, falling back to CPU")
+            return 'cpu'
+        if device_override == 'mps' and not torch.backends.mps.is_available():
+            logger.warning("MPS requested but not available, falling back to CPU")
+            return 'cpu'
+        return device_override
+
+    # Auto-detect (default behavior)
+    if torch.cuda.is_available():
+        device_name = torch.cuda.get_device_name(0)
+        logger.info(f"CUDA GPU detected: {device_name}")
+        return 'cuda'
+
+    if torch.backends.mps.is_available():
+        logger.info("Apple Silicon GPU (MPS) detected")
+        return 'mps'
+
+    return 'cpu'
+
+
 def get_embedding_model():
-    """Lazy-load and cache the sentence-transformers model."""
+    """Lazy-load and cache the sentence-transformers model.
+
+    Automatically uses GPU acceleration when available (CUDA or MPS).
+    Set CODE_MEMORY_DEVICE env var to 'cuda', 'mps', 'cpu', or 'auto'.
+    """
     global _model, _embedding_dim
     if _model is None:
         from sentence_transformers import SentenceTransformer
 
+        # Detect and use the best available device
+        device = _detect_device()
+
         # Use bundled model if available (PyInstaller build)
         model_path = _BUNDLED_MODEL_PATH if _BUNDLED_MODEL_PATH else EMBEDDING_MODEL_NAME
         _model = SentenceTransformer(
-            model_path, trust_remote_code=True
+            model_path, trust_remote_code=True, device=device
         )
+
+        if device != 'cpu':
+            logger.info(f"Embedding model loaded on {device.upper()} for acceleration")
+        else:
+            logger.info("Using CPU for embedding computation")
+
         # Cache the embedding dimension from the model
         _embedding_dim = _model.get_sentence_embedding_dimension()
         logger.info(f"Loaded embedding model '{EMBEDDING_MODEL_NAME}' with dimension: {_embedding_dim}")
@@ -744,6 +796,7 @@ def get_index_stats(db: sqlite3.Connection, project_dir: str) -> dict:
         "embedding": {
             "model": embedding_model[0] if embedding_model else None,
             "dimension": int(embedding_dim[0]) if embedding_dim else None,
+            "device": _detect_device() if _model is None else str(_model.device).split(':')[0],
         },
         "database": {
             "size_mb": db_size_mb,
