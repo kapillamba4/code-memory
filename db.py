@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import sys
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -37,8 +38,6 @@ DEFAULT_EMBEDDING_MODEL = "nomic-ai/nomic-embed-text-v1.5"
 EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
 
 # Check for bundled model (used in PyInstaller builds)
-import sys
-
 _BUNDLED_MODEL_PATH = None
 if getattr(sys, 'frozen', False):
     # Running as PyInstaller bundle
