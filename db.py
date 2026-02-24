@@ -43,10 +43,10 @@ CODE_MEMORY_DEVICE = os.environ.get("CODE_MEMORY_DEVICE", "auto")
 
 # Cross-encoder reranking - enabled by default for improved precision
 # Set CODE_MEMORY_RERANK=false to disable if latency is a concern
-CODE_MEMORY_RERANK = os.environ.get("CODE_MEMORY_RERANK", "true").lower() in ("true", "1", "yes")
+CODE_MEMORY_RERANK = os.environ.get("CODE_MEMORY_RERANK", "false").lower() in ("true", "1", "yes")
 
 # Default cross-encoder model for reranking
-DEFAULT_RERANK_MODEL = "BAAI/bge-reranker-base"
+DEFAULT_RERANK_MODEL = "cross-encoder/ms-marco-TinyBERT-L-2-v2"
 RERANK_MODEL_NAME = os.environ.get("RERANK_MODEL", DEFAULT_RERANK_MODEL)
 
 # Check for bundled model (used in PyInstaller builds)
@@ -246,7 +246,7 @@ def get_rerank_model():
             device = _detect_device() if _model is None else str(_model.device).split(':')[0]
 
             logger.info(f"Loading cross-encoder reranking model: {RERANK_MODEL_NAME}")
-            _rerank_model = CrossEncoder(RERANK_MODEL_NAME, device=device)
+            _rerank_model = CrossEncoder(RERANK_MODEL_NAME, device=device, trust_remote_code=True)
             logger.info(f"Cross-encoder model loaded on {device}")
         except Exception as e:
             logger.warning(f"Failed to load cross-encoder model: {e}. Reranking disabled.")
