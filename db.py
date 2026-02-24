@@ -34,7 +34,7 @@ _model = None
 _embedding_dim = None
 
 # Model identifier - can be overridden via EMBEDDING_MODEL environment variable
-DEFAULT_EMBEDDING_MODEL = "nomic-ai/nomic-embed-text-v1.5"
+DEFAULT_EMBEDDING_MODEL = "jinaai/jina-code-embeddings-0.5b"
 EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
 
 # Device selection - can be overridden via CODE_MEMORY_DEVICE environment variable

@@ -233,7 +233,7 @@ For Windows:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `CODE_MEMORY_LOG_LEVEL` | Logging verbosity (DEBUG, INFO, WARNING, ERROR) | INFO |
-| `EMBEDDING_MODEL` | HuggingFace model ID for embeddings | `nomic-ai/nomic-embed-text-v1.5` |
+| `EMBEDDING_MODEL` | HuggingFace model ID for embeddings | `jinaai/jina-code-embeddings-0.5b` |
 
 Example:
 ```bash
