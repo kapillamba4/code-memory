@@ -13,10 +13,11 @@ architecture:
 from __future__ import annotations
 
 import asyncio
-from typing import Literal
+from typing import Literal, cast
 
 from mcp.server.fastmcp import Context, FastMCP
 
+import api_types
 import db as db_mod
 import doc_parser as doc_parser_mod
 import errors
@@ -78,7 +79,7 @@ Indexing is incremental - unchanged files are skipped automatically.
 
 # ── Tool 0: check_index_status ─────────────────────────────────────────────
 @mcp.tool()
-def check_index_status(directory: str) -> dict:
+def check_index_status(directory: str) -> api_types.CheckIndexStatusResponse | api_types.ErrorResponse:
     """USE THIS TOOL to check if the codebase has been indexed and whether search tools will return results. Call this BEFORE search_code or search_docs if you're unsure about indexing state.
 
     TRIGGER - Call this tool when:
@@ -126,26 +127,27 @@ def check_index_status(directory: str) -> dict:
 
         indexed = symbols_count > 0 or doc_chunks_count > 0
 
-        return {
+        return cast(api_types.CheckIndexStatusResponse, {
             "indexed": indexed,
             "symbols_indexed": symbols_count,
             "doc_chunks_indexed": doc_chunks_count,
             "code_files_indexed": files_count,
             "doc_files_indexed": doc_files_count,
             "suggestion": "ready to search" if indexed else "CALL index_codebase FIRST",
-        }
+        })
 
     except Exception as e:
-        return {
-            "indexed": False,
-            "error": str(e),
-            "suggestion": "CALL index_codebase FIRST",
-        }
+        return cast(api_types.ErrorResponse, {
+            "error": True,
+            "error_type": "Exception",
+            "message": str(e),
+            "details": None,
+        })
 
 
 # ── Tool 0.5: get_index_stats ─────────────────────────────────────────────
 @mcp.tool()
-def get_index_stats(directory: str) -> dict:
+def get_index_stats(directory: str) -> api_types.GetIndexStatsResponse | api_types.ErrorResponse:
     """USE THIS TOOL to get comprehensive statistics about the code index.
 
     This tool provides detailed metrics about the index health, including
@@ -177,7 +179,7 @@ def get_index_stats(directory: str) -> dict:
         try:
             database = db_mod.get_db(directory)
             stats = db_mod.get_index_stats(database, directory)
-            return {"status": "ok", **stats}
+            return cast(api_types.GetIndexStatsResponse, {"status": "ok", **stats})
         except Exception as e:
             return errors.format_error(e)
 
@@ -188,7 +190,7 @@ def search_code(
     query: str,
     search_type: Literal["topic_discovery", "definition", "references", "file_structure"],
     directory: str,
-) -> dict:
+) -> api_types.SearchCodeResponse:
     """USE THIS INSTEAD OF grep/glob/find for ANY code search. This tool provides SEMANTIC code understanding - it finds related concepts, not just text matches.
 
     STOP: Before using grep, rg, find, or glob, use this tool instead. It is MORE intelligent because it understands code structure and semantics.
@@ -279,7 +281,7 @@ def search_code(
         try:
             # Validate inputs
             query = val.validate_query(query)
-            search_type = val.validate_search_type(
+            validated_search_type = val.validate_search_type(
                 search_type, ["topic_discovery", "definition", "references", "file_structure"]
             )
 
@@ -288,37 +290,57 @@ def search_code(
             # Check if anything is indexed
             symbols_count = database.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
 
-            if search_type == "topic_discovery":
+            if validated_search_type == "topic_discovery":
                 results = queries.discover_topic(query, database)
                 log.set_result_count(len(results))
-                response = {"status": "ok", "search_type": "topic_discovery", "query": query, "results": results}
+                topic_response = cast(api_types.SearchCodeTopicDiscoveryResponse, {
+                    "status": "ok",
+                    "search_type": "topic_discovery",
+                    "query": query,
+                    "results": results,
+                })
                 if not results and symbols_count == 0:
-                    response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."
-                return response
+                    topic_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
+                return topic_response
 
-            elif search_type == "definition":
+            elif validated_search_type == "definition":
                 results = queries.find_definition(query, database)
                 log.set_result_count(len(results))
-                response = {"status": "ok", "search_type": "definition", "query": query, "results": results}
+                def_response = cast(api_types.SearchCodeDefinitionResponse, {
+                    "status": "ok",
+                    "search_type": "definition",
+                    "query": query,
+                    "results": results,
+                })
                 if not results and symbols_count == 0:
-                    response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."
-                return response
+                    def_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
+                return def_response
 
-            elif search_type == "references":
+            elif validated_search_type == "references":
                 results = queries.find_references(query, database)
                 log.set_result_count(len(results))
-                response = {"status": "ok", "search_type": "references", "query": query, "results": results}
+                ref_response = cast(api_types.SearchCodeReferencesResponse, {
+                    "status": "ok",
+                    "search_type": "references",
+                    "query": query,
+                    "results": results,
+                })
                 if not results and symbols_count == 0:
-                    response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."
-                return response
+                    ref_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
+                return ref_response
 
-            elif search_type == "file_structure":
+            elif validated_search_type == "file_structure":
                 results = queries.get_file_structure(query, database)
                 log.set_result_count(len(results))
-                response = {"status": "ok", "search_type": "file_structure", "query": query, "results": results}
+                struct_response = cast(api_types.SearchCodeFileStructureResponse, {
+                    "status": "ok",
+                    "search_type": "file_structure",
+                    "query": query,
+                    "results": results,
+                })
                 if not results and symbols_count == 0:
-                    response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."
-                return response
+                    struct_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
+                return struct_response
 
             return errors.format_error(errors.ValidationError(f"Unknown search_type: {search_type}"))
 
@@ -330,7 +352,7 @@ def search_code(
 
 # ── Tool 2: index_codebase ────────────────────────────────────────────────
 @mcp.tool()
-async def index_codebase(directory: str, ctx: Context) -> dict:
+async def index_codebase(directory: str, ctx: Context) -> api_types.IndexCodebaseResponse | api_types.ErrorResponse:
     """YOU MUST CALL THIS TOOL FIRST before using search_code or search_docs. Use this tool to build the searchable index that powers all other code intelligence features.
 
     TRIGGER: Call this tool immediately when:
@@ -482,7 +504,7 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
             total_code_files = database.execute("SELECT COUNT(*) FROM files").fetchone()[0]
             total_doc_files = database.execute("SELECT COUNT(*) FROM doc_files").fetchone()[0]
 
-            return {
+            return cast(api_types.IndexCodebaseResponse, {
                 "status": "ok",
                 "directory": str(directory_path),
                 "performance": {
@@ -508,7 +530,7 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
                     "code": indexed,
                     "docs": doc_indexed,
                 },
-            }
+            })
 
         except errors.CodeMemoryError as e:
             return e.to_dict()
@@ -518,7 +540,7 @@ async def index_codebase(directory: str, ctx: Context) -> dict:
 
 # ── Tool 3: search_docs ────────────────────────────────────────────────────
 @mcp.tool()
-def search_docs(query: str, directory: str, top_k: int = 10) -> dict:
+def search_docs(query: str, directory: str, top_k: int = 10) -> api_types.SearchDocsResponse | api_types.ErrorResponse:
     """USE THIS TOOL for conceptual understanding and "how does X work?" questions. Search markdown documentation, READMEs, and code docstrings using semantic search.
 
     PREREQUISITE: This tool requires indexing. If results are empty or you haven't indexed this session, call index_codebase(directory) first.
@@ -567,12 +589,12 @@ def search_docs(query: str, directory: str, top_k: int = 10) -> dict:
             results = queries.search_documentation(query, database, top_k=top_k)
             log.set_result_count(len(results))
 
-            response = {
+            response = cast(api_types.SearchDocsResponse, {
                 "status": "ok",
                 "query": query,
                 "results": results,
                 "count": len(results),
-            }
+            })
 
             if not results and doc_chunks_count == 0:
                 response["hint"] = "No results. Documentation may not be indexed. Call index_codebase(directory) first."
@@ -594,7 +616,7 @@ def search_history(
     target_file: str | None = None,
     line_start: int | None = None,
     line_end: int | None = None,
-) -> dict:
+) -> api_types.SearchHistoryResponse:
     """USE THIS TOOL for Git history queries: understanding WHY changes were made, debugging regressions, or finding commit context. This tool operates on the local Git repository.
 
     TRIGGER - Call this tool when the user asks:
@@ -656,7 +678,7 @@ def search_history(
             import git_search as gs
 
             # Validate inputs
-            search_type = val.validate_search_type(
+            validated_search_type = val.validate_search_type(
                 search_type, ["commits", "file_history", "blame", "commit_detail"]
             )
             line_start, line_end = val.validate_line_range(line_start, line_end)
@@ -667,29 +689,48 @@ def search_history(
             except (InvalidGitRepositoryError, NoSuchPathError) as exc:
                 raise errors.GitError(f"Git repository not found: {exc}")
 
-            if search_type == "commits":
+            if validated_search_type == "commits":
                 query = val.validate_query(query, min_length=1)
                 results = gs.search_commits(repo, query, target_file)
                 log.set_result_count(len(results))
-                return {"status": "ok", "search_type": "commits", "query": query, "results": results}
+                return cast(api_types.SearchHistoryCommitsResponse, {
+                    "status": "ok",
+                    "search_type": "commits",
+                    "query": query,
+                    "results": results,
+                })
 
-            elif search_type == "file_history":
+            elif validated_search_type == "file_history":
                 if not target_file:
                     raise errors.ValidationError("target_file is required for file_history search")
                 results = gs.get_file_history(repo, target_file)
                 log.set_result_count(len(results))
-                return {"status": "ok", "search_type": "file_history", "target_file": target_file, "results": results}
+                return cast(api_types.SearchHistoryFileHistoryResponse, {
+                    "status": "ok",
+                    "search_type": "file_history",
+                    "target_file": target_file,
+                    "results": results,
+                })
 
-            elif search_type == "blame":
+            elif validated_search_type == "blame":
                 if not target_file:
                     raise errors.ValidationError("target_file is required for blame search")
                 results = gs.get_blame(repo, target_file, line_start, line_end)
                 log.set_result_count(len(results))
-                return {"status": "ok", "search_type": "blame", "target_file": target_file, "results": results}
+                return cast(api_types.SearchHistoryBlameResponse, {
+                    "status": "ok",
+                    "search_type": "blame",
+                    "target_file": target_file,
+                    "results": results,
+                })
 
-            elif search_type == "commit_detail":
+            elif validated_search_type == "commit_detail":
                 result = gs.get_commit_detail(repo, query, target_file)
-                return {"status": "ok", "search_type": "commit_detail", "result": result}
+                return cast(api_types.SearchHistoryCommitDetailResponse, {
+                    "status": "ok",
+                    "search_type": "commit_detail",
+                    "result": result,
+                })
 
             return errors.format_error(errors.ValidationError(f"Unknown search_type: {search_type}"))
 

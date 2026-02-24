@@ -8,6 +8,11 @@ structured error responses to MCP clients.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import api_types
+
 
 class CodeMemoryError(Exception):
     """Base exception for all code-memory errors.
@@ -21,7 +26,7 @@ class CodeMemoryError(Exception):
         self.details = details or {}
         super().__init__(message)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> api_types.ErrorResponse:
         """Convert exception to structured error response dict."""
         return {
             "error": True,
@@ -91,7 +96,7 @@ class EmbeddingError(CodeMemoryError):
     pass
 
 
-def format_error(error: Exception) -> dict:
+def format_error(error: Exception) -> api_types.ErrorResponse:
     """Format any exception as a structured error response.
 
     Args:

@@ -28,6 +28,9 @@ jobs:
       - name: Run linting
         run: uv run ruff check .
 
+      - name: Run type checking
+        run: uv run mypy api_types.py errors.py server.py
+
       - name: Run tests
         run: uv run pytest tests/ -v --tb=short
 
