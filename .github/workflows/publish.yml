@@ -10,24 +10,34 @@ jobs:
     name: Build and publish
     runs-on: ubuntu-latest
     permissions:
-      id-token: write  # Required for PyPI trusted publishing
+      id-token: write  # Required for PyPI trusted publishing and MCP OIDC
       contents: read
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          
+
       # uv python install ensures the required python version is available
       - name: Set up Python
         run: uv python install
-        
+
       - name: Build package
         run: uv build
-        
+
       - name: Publish to PyPI
         run: uv publish
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        run: ./mcp-publisher publish
