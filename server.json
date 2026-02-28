@@ -6,12 +6,12 @@
     "url": "https://github.com/kapillamba4/code-memory",
     "source": "github"
   },
-  "version": "1.0.24",
+  "version": "1.0.25",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "code-memory",
-      "version": "1.0.24",
+      "version": "1.0.25",
       "transport": {
         "type": "stdio"
       },
