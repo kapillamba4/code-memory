@@ -1,5 +1,7 @@
 # code-memory
 
+<!-- mcp-name: io.github.kapillamba4/code-memory -->
+
 <img src="assets/logo.png" alt="code-memory logo" width="100%">
 
 [![Zero Telemetry](https://img.shields.io/badge/Zero-Telemetry-brightgreen)](#privacy--security)

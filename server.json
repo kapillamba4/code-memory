@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.kapillamba4/code-memory",
+  "description": "Local semantic code search with Git history. Works offline, no API key needed.",
+  "repository": {
+    "url": "https://github.com/kapillamba4/code-memory",
+    "source": "github"
+  },
+  "version": "1.0.23",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "code-memory",
+      "version": "1.0.23",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "Logging verbosity (DEBUG, INFO, WARNING, ERROR)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "CODE_MEMORY_LOG_LEVEL"
+        },
+        {
+          "description": "HuggingFace model ID for embeddings",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "EMBEDDING_MODEL"
+        }
+      ]
+    }
+  ]
+}
