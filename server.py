@@ -295,9 +295,6 @@ def search_code(
 
             database = db_mod.get_db(directory)
 
-            # Check if anything is indexed
-            symbols_count = database.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
-
             if validated_search_type == "topic_discovery":
                 results = queries.discover_topic(query, database)
                 log.set_result_count(len(results))
@@ -307,8 +304,10 @@ def search_code(
                     "query": query,
                     "results": results,
                 })
-                if not results and symbols_count == 0:
-                    topic_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
+                if not results:
+                    symbols_count = database.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+                    if symbols_count == 0:
+                        topic_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
                 return topic_response
 
             elif validated_search_type == "definition":
@@ -320,8 +319,10 @@ def search_code(
                     "query": query,
                     "results": results,
                 })
-                if not results and symbols_count == 0:
-                    def_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
+                if not results:
+                    symbols_count = database.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+                    if symbols_count == 0:
+                        def_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
                 return def_response
 
             elif validated_search_type == "references":
@@ -333,8 +334,10 @@ def search_code(
                     "query": query,
                     "results": results,
                 })
-                if not results and symbols_count == 0:
-                    ref_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
+                if not results:
+                    symbols_count = database.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+                    if symbols_count == 0:
+                        ref_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
                 return ref_response
 
             elif validated_search_type == "file_structure":
@@ -346,8 +349,10 @@ def search_code(
                     "query": query,
                     "results": results,
                 })
-                if not results and symbols_count == 0:
-                    struct_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
+                if not results:
+                    symbols_count = database.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+                    if symbols_count == 0:
+                        struct_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
                 return struct_response
 
             return errors.format_error(errors.ValidationError(f"Unknown search_type: {search_type}"))
@@ -594,21 +599,10 @@ def search_docs(query: str, directory: str, top_k: int = 10) -> api_types.Search
 
             database = db_mod.get_db(directory)
 
-            # Check if anything is indexed
-            doc_chunks_count = database.execute("SELECT COUNT(*) FROM doc_chunks").fetchone()[0]
-
-            results = queries.search_documentation(query, database, top_k=top_k)
-            log.set_result_count(len(results))
-
-            response = cast(api_types.SearchDocsResponse, {
-                "status": "ok",
-                "query": query,
-                "results": results,
-                "count": len(results),
-            })
-
-            if not results and doc_chunks_count == 0:
-                response["hint"] = "No results. Documentation may not be indexed. Call index_codebase(directory) first."
+            if not results:
+                doc_chunks_count = database.execute("SELECT COUNT(*) FROM doc_chunks").fetchone()[0]
+                if doc_chunks_count == 0:
+                    response["hint"] = "No results. Documentation may not be indexed. Call index_codebase(directory) first."
 
             return response
 

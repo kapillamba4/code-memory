@@ -11,6 +11,7 @@ from __future__ import annotations
 import struct
 
 import db as db_mod
+import validation as val
 
 # ---------------------------------------------------------------------------
 # Hybrid search (BM25 + vector → RRF)
@@ -24,8 +25,8 @@ def _bm25_search(query: str, db, top_k: int = 50) -> list[dict]:
 
     Returns a ranked list of dicts with ``symbol_id`` and ``bm25_score``.
     """
-    # FTS5 MATCH query — escape double-quotes in user input
-    safe_query = query.replace('"', '""')
+    # FTS5 MATCH query — escape double-quotes and special characters in user input
+    safe_query = val.sanitize_fts_query(query)
     try:
         rows = db.execute(
             """
@@ -209,8 +210,8 @@ def _get_bm25_highlights(query: str, source_text: str, db) -> list[str]:
     if not source_text or not query:
         return []
 
-    # Use FTS5 highlight function to get matched portions
-    safe_query = query.replace('"', '""')
+    # Use FTS5 highlight function to get matched portions safely
+    safe_query = val.sanitize_fts_query(query)
     try:
         # Create a temporary FTS5 query to get highlights
         # We use the snippet function which returns highlighted fragments
@@ -479,7 +480,7 @@ def _doc_bm25_search(query: str, db, top_k: int = 50) -> list[dict]:
 
     Returns a ranked list of dicts with chunk metadata and bm25_score.
     """
-    safe_query = query.replace('"', '""')
+    safe_query = val.sanitize_fts_query(query)
     try:
         rows = db.execute(
             """

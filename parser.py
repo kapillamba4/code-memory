@@ -265,11 +265,11 @@ def _extract_symbols(
     """Walk the tree-sitter AST and extract symbols.
 
     Returns a flat list of dicts with keys:
-      name, kind, line_start, line_end, source_text, children (nested symbols)
+      name, kind, line_start, line_end, source_text, parent_idx
     """
     symbols: list[dict[str, Any]] = []
 
-    def _walk(node: Node, parent_kind: str | None = None):
+    def _walk(node: Node, parent_idx: int | None = None, parent_kind: str | None = None):
         node_type = node.type
         mapping = _NODE_KIND_MAP.get(node_type)
 
@@ -289,22 +289,20 @@ def _extract_symbols(
                 "line_start": node.start_point[0] + 1,  # 1-indexed
                 "line_end": node.end_point[0] + 1,
                 "source_text": src_text,
-                "children": [],
+                "parent_idx": parent_idx,
             }
+            current_idx = len(symbols)
             symbols.append(sym)
 
             # Recurse into container nodes (classes, impl blocks, etc.)
             if is_container:
-                child_syms_before = len(symbols)
                 for child in node.children:
-                    _walk(child, parent_kind=kind)
-                # Attach newly-found children
-                sym["children"] = symbols[child_syms_before:]
+                    _walk(child, parent_idx=current_idx, parent_kind=kind)
             return
 
         # Not a symbol node — recurse into children
         for child in node.children:
-            _walk(child, parent_kind=parent_kind)
+            _walk(child, parent_idx=parent_idx, parent_kind=parent_kind)
 
     _walk(tree_root)
     return symbols
@@ -390,33 +388,27 @@ def index_file(filepath: str, db) -> dict:
         raw_symbols = _extract_symbols(tree.root_node, source_bytes)
 
         # === BATCH PROCESSING ===
-        # Collect all symbols (including nested) for batch embedding
-        all_symbols: list[tuple[dict, int | None]] = []  # (sym, parent_id)
-        all_embed_inputs: list[str] = []
-
-        def _collect_for_batch(sym_list, parent_id=None):
-            for sym in sym_list:
-                all_symbols.append((sym, parent_id))
-                embed_input = f"{sym['kind']} {sym['name']}: {sym['source_text'][:1000]}"
-                all_embed_inputs.append(embed_input)
-                if sym.get("children"):
-                    _collect_for_batch(sym["children"], parent_id=None)
-
-        _collect_for_batch(raw_symbols)
+        all_embed_inputs = []
+        for sym in raw_symbols:
+            embed_input = f"{sym['kind']} {sym['name']}: {sym['source_text'][:1000]}"
+            all_embed_inputs.append(embed_input)
 
         # Batch embed all at once
         if all_embed_inputs:
             embeddings = db_mod.embed_texts_batch(all_embed_inputs, batch_size=64)
 
             # Store all in single transaction
+            db_ids = {}
             with db_mod.transaction(db):
-                for i, (sym, parent_id) in enumerate(all_symbols):
+                for i, sym in enumerate(raw_symbols):
+                    parent_id = db_ids.get(sym["parent_idx"]) if sym["parent_idx"] is not None else None
                     sym_id = db_mod.upsert_symbol(
                         db, sym["name"], sym["kind"], file_id,
                         sym["line_start"], sym["line_end"],
                         parent_id, sym["source_text"],
                         auto_commit=False
                     )
+                    db_ids[i] = sym_id
                     db_mod.upsert_embedding(db, sym_id, embeddings[i], auto_commit=False)
                     symbols_indexed += 1
 
@@ -540,7 +532,7 @@ def index_directory(dirpath: str, db, progress_callback=None) -> list[dict]:
         progress_callback(total_files, total_files, "Generating embeddings...")
 
     # Collect all texts that need embedding
-    embedding_batches: list[tuple[str, list[tuple]]] = []  # (filepath, [(embed_text, symbol_data), ...])
+    embedding_batches: list[tuple[str, list[str]]] = []  # (filepath, [embed_text])
 
     for fpath, parsed_data, error in parsed_files:
         if error or parsed_data is None or parsed_data.get("skipped"):
@@ -549,24 +541,28 @@ def index_directory(dirpath: str, db, progress_callback=None) -> list[dict]:
         embed_inputs = []
         for sym in parsed_data.get("symbols", []):
             embed_input = f"{sym['kind']} {sym['name']}: {sym['source_text'][:1000]}"
-            embed_inputs.append((embed_input, sym))
+            embed_inputs.append(embed_input)
 
         if embed_inputs:
-            embedding_batches.append((fpath, embed_inputs, parsed_data))
+            embedding_batches.append((fpath, embed_inputs))
 
     # Generate embeddings in batch
     all_embed_texts = []
-    for fpath, embed_inputs, _ in embedding_batches:
-        for embed_text, _ in embed_inputs:
-            all_embed_texts.append(embed_text)
+    for fpath, embed_inputs in embedding_batches:
+        all_embed_texts.extend(embed_inputs)
 
     all_embeddings = db_mod.embed_texts_batch(all_embed_texts, batch_size=64) if all_embed_texts else []
+    
+    file_to_embeddings = {}
+    embed_idx = 0
+    for fpath, embed_inputs in embedding_batches:
+        file_to_embeddings[fpath] = all_embeddings[embed_idx : embed_idx + len(embed_inputs)]
+        embed_idx += len(embed_inputs)
 
     # Phase 3: Sequential DB writes (to avoid SQLite conflicts)
     if progress_callback:
         progress_callback(total_files, total_files, "Storing to database...")
 
-    embed_idx = 0
     for fpath, parsed_data, error in parsed_files:
         if error:
             logger.exception("Failed to index %s", fpath)
@@ -589,8 +585,8 @@ def index_directory(dirpath: str, db, progress_callback=None) -> list[dict]:
             continue
 
         # Find embeddings for this file
-        file_result = _store_parsed_file(fpath, parsed_data, db, embedding_batches, all_embeddings, embed_idx)
-        embed_idx += len(parsed_data.get("symbols", []))
+        file_embeddings = file_to_embeddings.get(fpath)
+        file_result = _store_parsed_file(fpath, parsed_data, db, file_embeddings)
         results.append(file_result)
 
     # Log performance summary
@@ -654,18 +650,8 @@ def _parse_file_for_indexing(filepath: str, db) -> dict | None:
         parser = Parser(lang)
         tree = parser.parse(source_bytes)
 
-        # Extract symbols (flat list for batch processing)
-        raw_symbols = _extract_symbols(tree.root_node, source_bytes)
-        all_symbols: list[dict] = []
-
-        def _collect_symbols(sym_list):
-            for sym in sym_list:
-                all_symbols.append(sym)
-                if sym.get("children"):
-                    _collect_symbols(sym["children"])
-
-        _collect_symbols(raw_symbols)
-        result["symbols"] = all_symbols
+        # Extract symbols (flat list natively)
+        result["symbols"] = _extract_symbols(tree.root_node, source_bytes)
 
         # Extract references
         refs = _extract_references(tree.root_node, source_bytes)
@@ -679,7 +665,7 @@ def _parse_file_for_indexing(filepath: str, db) -> dict | None:
             "line_start": 1,
             "line_end": source_text.count("\n") + 1,
             "source_text": source_text[:5000],
-            "parent_id": None,
+            "parent_idx": None,
         }]
         result["fallback"] = True
 
@@ -690,9 +676,7 @@ def _store_parsed_file(
     filepath: str,
     parsed_data: dict,
     db,
-    embedding_batches: list,
-    all_embeddings: list,
-    start_embed_idx: int
+    file_embeddings: list | None
 ) -> dict:
     """Store parsed file data to database with pre-computed embeddings."""
     filepath = os.path.abspath(filepath)
@@ -706,25 +690,19 @@ def _store_parsed_file(
     symbols_indexed = 0
     references_indexed = 0
 
-    # Find embeddings for this file
-    file_embeddings = None
-    embed_offset = 0
-    for bfpath, embed_inputs, _ in embedding_batches:
-        if bfpath == filepath:
-            file_embeddings = all_embeddings[start_embed_idx + embed_offset:start_embed_idx + embed_offset + len(embed_inputs)]
-            break
-        embed_offset += len(embed_inputs)
-
     # Store symbols with embeddings
     if parsed_data.get("symbols") and file_embeddings:
+        db_ids = {}
         with db_mod.transaction(db):
             for i, sym in enumerate(parsed_data["symbols"]):
+                parent_id = db_ids.get(sym["parent_idx"]) if sym["parent_idx"] is not None else None
                 sym_id = db_mod.upsert_symbol(
                     db, sym["name"], sym["kind"], file_id,
                     sym["line_start"], sym["line_end"],
-                    sym.get("parent_id"), sym["source_text"],
+                    parent_id, sym["source_text"],
                     auto_commit=False
                 )
+                db_ids[i] = sym_id
                 if i < len(file_embeddings):
                     db_mod.upsert_embedding(db, sym_id, file_embeddings[i], auto_commit=False)
                 symbols_indexed += 1

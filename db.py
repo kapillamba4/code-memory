@@ -493,9 +493,6 @@ def get_db(project_dir: str) -> sqlite3.Connection:
 
     db.executescript(_SCHEMA_SQL)
 
-    # Get embedding dimension from the model (loads model if needed)
-    embedding_dim = get_embedding_dim()
-
     # Check if the embedding model has changed
     stored_model = db.execute(
         "SELECT value FROM index_metadata WHERE key = 'embedding_model'"
@@ -504,12 +501,14 @@ def get_db(project_dir: str) -> sqlite3.Connection:
         "SELECT value FROM index_metadata WHERE key = 'embedding_dim'"
     ).fetchone()
 
-    model_changed = (
-        stored_model is None
-        or stored_model[0] != EMBEDDING_MODEL_NAME
-        or stored_dim is None
-        or int(stored_dim[0]) != embedding_dim
-    )
+    # Only load the model if we don't have matching stored metadata yet
+    if stored_model and stored_model[0] == EMBEDDING_MODEL_NAME and stored_dim:
+        embedding_dim = int(stored_dim[0])
+        model_changed = False
+    else:
+        # Get embedding dimension from the model (loads model if needed)
+        embedding_dim = get_embedding_dim()
+        model_changed = True
 
     if model_changed:
         if stored_model is not None:
@@ -548,8 +547,6 @@ def _invalidate_index(db: sqlite3.Connection, embedding_dim: int) -> None:
 
     # Clear all indexed data (cascades will handle related data via foreign keys,
     # but we need to be explicit since FK enforcement may vary)
-    db.execute("DELETE FROM symbol_embeddings")
-    db.execute("DELETE FROM doc_embeddings")
     db.execute("DELETE FROM symbols")
     db.execute("DELETE FROM files")
     db.execute("DELETE FROM references_")
@@ -927,7 +924,7 @@ def get_index_stats(db: sqlite3.Connection, project_dir: str) -> dict:
         "embedding": {
             "model": embedding_model[0] if embedding_model else None,
             "dimension": int(embedding_dim[0]) if embedding_dim else None,
-            "device": _detect_device() if _model is None else str(_model.device).split(':')[0],
+            "device": str(_model.device).split(':')[0] if _model is not None else "not_loaded",
         },
         "database": {
             "size_mb": db_size_mb,

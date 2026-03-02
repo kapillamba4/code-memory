@@ -9,7 +9,8 @@ These types provide:
 
 from __future__ import annotations
 
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal
+from typing_extensions import NotRequired, TypedDict
 
 # ---------------------------------------------------------------------------
 # Shared / Nested Types
