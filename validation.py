@@ -266,9 +266,13 @@ def validate_path_in_directory(path: str, base_dir: str) -> Path:
 
 
 def sanitize_fts_query(query: str) -> str:
-    """Sanitize a query for FTS5 MATCH.
+    """Sanitize a query for FTS5 MATCH with good recall.
 
-    Escapes special FTS5 characters to prevent query errors.
+    Splits the query into individual terms, strips dangerous FTS5 special
+    characters from each token, and joins them so FTS5 treats them as
+    independent AND-required terms.  This avoids the recall-killing behaviour
+    of wrapping the whole query in double-quotes (which forces exact phrase
+    matching and misses documents where the words appear separately).
 
     Args:
         query: Query string to sanitize
@@ -276,16 +280,23 @@ def sanitize_fts_query(query: str) -> str:
     Returns:
         Sanitized query safe for FTS5 MATCH
     """
-    # FTS5 special characters that need escaping
-    # In FTS5, double-quotes are escaped by doubling them
-    sanitized = query.replace('"', '""')
+    # Strip characters that are FTS5 operators or break tokenisation.
+    # We intentionally do NOT wrap in quotes so FTS5 treats each word
+    # independently (implicit AND, much better recall for NL queries).
+    strip_chars = re.compile(r'["\-\^\*\(\):\{\}]')
 
-    # Wrap in quotes if contains special characters
-    special_chars = {'-', '*', '^', '(', ')', ':', '"'}
-    if any(c in query for c in special_chars):
-        sanitized = f'"{sanitized}"'
+    tokens = []
+    for token in query.split():
+        cleaned = strip_chars.sub('', token).strip()
+        if cleaned:
+            tokens.append(cleaned)
 
-    return sanitized
+    if not tokens:
+        # Fall back to a safe literal quote of the whole thing
+        escaped = query.replace('"', '""')
+        return f'"{escaped}"'
+
+    return ' '.join(tokens)
 
 
 def validate_commit_hash(hash_str: str) -> str:

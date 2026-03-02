@@ -394,8 +394,11 @@ def index_file(filepath: str, db) -> dict:
             all_embed_inputs.append(embed_input)
 
         # Batch embed all at once
+        # Use code2code task_type for code content at index time.
+        # Query time uses nl2code (natural language -> code), so index time
+        # should use code2code (code -> code) to place vectors in the correct subspace.
         if all_embed_inputs:
-            embeddings = db_mod.embed_texts_batch(all_embed_inputs, batch_size=64)
+            embeddings = db_mod.embed_texts_batch(all_embed_inputs, batch_size=64, task_type="code2code")
 
             # Store all in single transaction
             db_ids = {}
@@ -423,7 +426,7 @@ def index_file(filepath: str, db) -> dict:
     else:
         # ── Fallback: index entire file as one symbol ─────────────────
         basename = os.path.basename(filepath)
-        embeddings = db_mod.embed_texts_batch([f"file {basename}: {source_text[:1000]}"])
+        embeddings = db_mod.embed_texts_batch([f"file {basename}: {source_text[:1000]}"], task_type="code2code")
 
         with db_mod.transaction(db):
             sym_id = db_mod.upsert_symbol(
@@ -551,7 +554,8 @@ def index_directory(dirpath: str, db, progress_callback=None) -> list[dict]:
     for fpath, embed_inputs in embedding_batches:
         all_embed_texts.extend(embed_inputs)
 
-    all_embeddings = db_mod.embed_texts_batch(all_embed_texts, batch_size=64) if all_embed_texts else []
+    # Use code2code task_type at index time (query time uses nl2code)
+    all_embeddings = db_mod.embed_texts_batch(all_embed_texts, batch_size=64, task_type="code2code") if all_embed_texts else []
     
     file_to_embeddings = {}
     embed_idx = 0

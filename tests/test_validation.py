@@ -187,9 +187,14 @@ class TestSanitizeFtsQuery:
         assert result == "simple query"
 
     def test_escapes_quotes(self):
-        """Test that quotes are escaped."""
+        """Test that quotes are safely handled (stripped from tokens to avoid FTS5 phrase-match wrapping)."""
         result = val.sanitize_fts_query('test "quoted"')
-        assert '""' in result or '"' in result
+        # New sanitizer strips quotes from tokens rather than doubling them,
+        # so the result should contain the words without quote characters,
+        # avoiding the recall-killing phrase-match wrapping behavior.
+        assert '"' not in result  # No phrase-wrapping
+        assert "test" in result   # Words are preserved
+        assert "quoted" in result
 
 
 class TestValidateCommitHash:

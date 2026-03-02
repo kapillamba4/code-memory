@@ -156,9 +156,13 @@ def hybrid_search(query: str, db, top_k: int = 10, rerank: bool = True) -> list[
     # Sort by descending RRF score
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
 
+    # Theoretical max RRF score: 1/(k+1) per source, 2/(k+1) for hybrid
+    max_single_rrf = 1.0 / (_RRF_K + 1)  # ≈ 0.01639
+    max_hybrid_rrf = 2.0 * max_single_rrf  # ≈ 0.03279
+
     # Build results with match metadata
     results = []
-    for sid, score in ranked:
+    for sid, raw_score in ranked:
         sources = match_sources.get(sid, [])
         is_hybrid = len(sources) == 2
 
@@ -170,21 +174,22 @@ def hybrid_search(query: str, db, top_k: int = 10, rerank: bool = True) -> list[
         else:
             match_reason = "semantic match (vector)"
 
-        # Calculate confidence (normalize RRF score to 0-1 range)
-        # Max possible RRF score for a single source is 1/61 ≈ 0.0164
-        # For hybrid it's 2/61 ≈ 0.0328. We normalize accordingly.
-        max_single_rrf = 1.0 / (_RRF_K + 1)  # ≈ 0.0164
-        max_hybrid_rrf = 2.0 * max_single_rrf  # ≈ 0.0328
-        if is_hybrid:
-            confidence = min(1.0, score / max_hybrid_rrf)
-        else:
-            confidence = min(1.0, (score / max_single_rrf) * 0.7)  # Cap single-source at 0.7
+        # Normalize score to 0-100 range for human readability.
+        # Raw RRF scores are always tiny (~0.01-0.03) which is misleading as
+        # a relevance indicator. Normalize against the theoretical maximum.
+        max_rrf = max_hybrid_rrf if is_hybrid else max_single_rrf
+        normalized_score = min(100.0, (raw_score / max_rrf) * 100.0)
+
+        # Confidence: normalized score as 0-1 fraction.
+        # No arbitrary cap — a single-source match can be 100% confident
+        # if it's rank #1 in that source.
+        confidence = round(normalized_score / 100.0, 3)
 
         result = {
             **details[sid],
-            "score": round(score, 6),
+            "score": round(normalized_score, 1),
             "match_reason": match_reason,
-            "confidence": round(confidence, 3),
+            "confidence": confidence,
             "match_highlights": [],  # Will be populated below if BM25 match
         }
 
@@ -726,7 +731,7 @@ def discover_topic(topic_query: str, db, top_k: int = 15, include_snippets: bool
                 "symbol_kinds": set(),
                 "symbol_details": [],  # Store full details for snippets
             }
-        file_aggregates[fp]["relevance_score"] += r.get("score", 0.5)
+        file_aggregates[fp]["relevance_score"] += r.get("score", 0.0)
         file_aggregates[fp]["matched_symbols"].append(r.get("name", ""))
         file_aggregates[fp]["symbol_kinds"].add(r.get("kind", ""))
         file_aggregates[fp]["symbol_details"].append({
