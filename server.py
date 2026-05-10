@@ -12,6 +12,7 @@ architecture:
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 from typing import Literal, cast
 
@@ -772,10 +773,8 @@ def search_history(
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────────
-def build_arg_parser() -> "argparse.ArgumentParser":
+def build_arg_parser() -> argparse.ArgumentParser:
     """Build and return the CLI argument parser for code-memory."""
-    import argparse
-
     parser = argparse.ArgumentParser(
         prog="code-memory",
         description="code-memory MCP server",

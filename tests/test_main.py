@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import server as server_mod
 from server import build_arg_parser
 
 
@@ -56,52 +57,34 @@ class TestMainArgParsing:
 class TestMainRunsBehavior:
     """Tests that main() calls mcp.run() with the correct arguments."""
 
-    @pytest.fixture(autouse=True)
-    def require_server(self):
-        """Skip tests when server module dependencies are unavailable."""
-        pytest.importorskip("sqlite_vec", reason="sqlite_vec not installed")
-
-    @pytest.fixture
-    def server_main(self):
-        """Import and return the server.main function."""
-        import importlib
-
-        import server as server_mod
-        importlib.reload(server_mod)
-        return server_mod.main
-
-    def test_stdio_calls_run_with_stdio(self, server_main):
+    def test_stdio_calls_run_with_stdio(self):
         """main() with no args should call mcp.run(transport='stdio')."""
-        import server as server_mod
         with patch("sys.argv", ["code-memory"]):
             with patch.object(server_mod, "mcp") as mock_mcp:
                 mock_mcp.settings = MagicMock()
-                server_main()
+                server_mod.main()
                 mock_mcp.run.assert_called_once_with(transport="stdio")
 
-    def test_sse_calls_run_with_sse(self, server_main):
+    def test_sse_calls_run_with_sse(self):
         """main() with --transport sse should call mcp.run(transport='sse')."""
-        import server as server_mod
         with patch("sys.argv", ["code-memory", "--transport", "sse"]):
             with patch.object(server_mod, "mcp") as mock_mcp:
                 mock_mcp.settings = MagicMock()
-                server_main()
+                server_mod.main()
                 mock_mcp.run.assert_called_once_with(transport="sse")
 
-    def test_sse_sets_port_on_settings(self, server_main):
+    def test_sse_sets_port_on_settings(self):
         """main() with --transport sse --port 9000 should set mcp.settings.port."""
-        import server as server_mod
         with patch("sys.argv", ["code-memory", "--transport", "sse", "--port", "9000"]):
             with patch.object(server_mod, "mcp") as mock_mcp:
                 mock_mcp.settings = MagicMock()
-                server_main()
+                server_mod.main()
                 assert mock_mcp.settings.port == 9000
 
-    def test_sse_sets_host_on_settings(self, server_main):
+    def test_sse_sets_host_on_settings(self):
         """main() with --transport sse --host 0.0.0.0 should set mcp.settings.host."""
-        import server as server_mod
         with patch("sys.argv", ["code-memory", "--transport", "sse", "--host", "0.0.0.0"]):
             with patch.object(server_mod, "mcp") as mock_mcp:
                 mock_mcp.settings = MagicMock()
-                server_main()
+                server_mod.main()
                 assert mock_mcp.settings.host == "0.0.0.0"

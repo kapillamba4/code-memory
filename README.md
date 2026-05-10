@@ -129,18 +129,7 @@ uv run ruff check .
 uv run ruff format .
 
 # Build package
-uv build# Clone the repo
-git clone https://github.com/kapillamba4/code-memory.git
-cd code-memory
-
-# Install dependencies
-uv sync
-
-# Run the MCP server (stdio transport)
-uv run mcp run server.py
-
-# Run the MCP server (SSE transport for shared usage)
-uv run python server.py --transport sse
+uv build
 
 # Build standalone binary (requires pyinstaller)
 pip install pyinstaller
@@ -299,6 +288,8 @@ Instead of launching a new process, point your MCP host at the running SSE endpo
 ```
 
 > **Tip:** Configure `uvx code-memory --transport sse` to start via a single-instance service manager (e.g. systemd user service, launchd agent, or another one-time login/startup mechanism) so the shared server starts automatically.
+
+> **Security:** The SSE endpoint is unauthenticated. Keep the default `--host 127.0.0.1` so only local processes can connect; do not bind to `0.0.0.0` or a public interface unless you've put authentication in front of it.
 
 ## Configuration
 
