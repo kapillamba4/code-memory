@@ -232,39 +232,6 @@ def validate_top_k(value: int, min_val: int = 1, max_val: int = 100, default: in
     return value
 
 
-def validate_path_in_directory(path: str, base_dir: str) -> Path:
-    """Validate that a path is within a base directory (prevent path traversal).
-
-    Args:
-        path: Path to validate
-        base_dir: Base directory that path must be within
-
-    Returns:
-        Resolved Path object
-
-    Raises:
-        ValidationError: If path escapes base directory
-    """
-    if not path:
-        raise ValidationError("Path cannot be empty")
-
-    try:
-        resolved_path = Path(path).resolve()
-        resolved_base = Path(base_dir).resolve()
-    except Exception as e:
-        raise ValidationError(f"Invalid path: {path}", {"exception": str(e)})
-
-    try:
-        resolved_path.relative_to(resolved_base)
-    except ValueError:
-        raise ValidationError(
-            f"Path escapes base directory: {path}",
-            {"base_directory": str(resolved_base)}
-        )
-
-    return resolved_path
-
-
 def sanitize_fts_query(query: str) -> str:
     """Sanitize a query for FTS5 MATCH with good recall.
 

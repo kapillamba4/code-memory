@@ -199,16 +199,6 @@ def get_db_logger() -> logging.Logger:
     return get_logger("db")
 
 
-def get_parser_logger() -> logging.Logger:
-    """Get logger for parser module."""
-    return get_logger("parser")
-
-
 def get_query_logger() -> logging.Logger:
     """Get logger for query module."""
     return get_logger("queries")
-
-
-def get_git_logger() -> logging.Logger:
-    """Get logger for git search module."""
-    return get_logger("git")

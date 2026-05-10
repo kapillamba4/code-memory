@@ -349,7 +349,7 @@ def transaction(db: sqlite3.Connection):
     Example:
         with transaction(db):
             for item in items:
-                upsert_symbol(db, ..., auto_commit=False)
+                upsert_file(db, ..., auto_commit=False)
         # Single commit here
     """
     # Disable autocommit by starting a transaction
@@ -668,79 +668,6 @@ def delete_file_data(db: sqlite3.Connection, file_id: int, auto_commit: bool = T
 
     db.execute("DELETE FROM symbols WHERE file_id = ?", (file_id,))
     db.execute("DELETE FROM references_ WHERE file_id = ?", (file_id,))
-    if auto_commit:
-        db.commit()
-
-
-def upsert_symbol(
-    db: sqlite3.Connection,
-    name: str,
-    kind: str,
-    file_id: int,
-    line_start: int,
-    line_end: int,
-    parent_symbol_id: int | None,
-    source_text: str,
-    auto_commit: bool = True,
-) -> int:
-    """Insert or update a symbol record. Returns the symbol_id."""
-    db.execute(
-        """
-        INSERT INTO symbols (name, kind, file_id, line_start, line_end,
-                             parent_symbol_id, source_text)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(file_id, name, kind, line_start) DO UPDATE SET
-            line_end         = excluded.line_end,
-            parent_symbol_id = excluded.parent_symbol_id,
-            source_text      = excluded.source_text
-        """,
-        (name, kind, file_id, line_start, line_end, parent_symbol_id, source_text),
-    )
-    if auto_commit:
-        db.commit()
-    row = db.execute(
-        "SELECT id FROM symbols WHERE file_id = ? AND name = ? AND kind = ? AND line_start = ?",
-        (file_id, name, kind, line_start),
-    ).fetchone()
-    return row[0]
-
-
-def upsert_reference(
-    db: sqlite3.Connection,
-    symbol_name: str,
-    file_id: int,
-    line_number: int,
-    auto_commit: bool = True,
-) -> None:
-    """Insert or update a cross-reference record."""
-    db.execute(
-        """
-        INSERT INTO references_ (symbol_name, file_id, line_number)
-        VALUES (?, ?, ?)
-        ON CONFLICT(symbol_name, file_id, line_number) DO NOTHING
-        """,
-        (symbol_name, file_id, line_number),
-    )
-    if auto_commit:
-        db.commit()
-
-
-def upsert_embedding(
-    db: sqlite3.Connection,
-    symbol_id: int,
-    embedding: list[float],
-    auto_commit: bool = True,
-) -> None:
-    """Insert or replace a symbol's dense vector embedding."""
-    import struct
-
-    blob = struct.pack(f"{len(embedding)}f", *embedding)
-    # sqlite-vec doesn't support ON CONFLICT, so delete-then-insert
-    db.execute("DELETE FROM symbol_embeddings WHERE symbol_id = ?", (symbol_id,))
-    db.execute(
-        "INSERT INTO symbol_embeddings (symbol_id, embedding) VALUES (?, ?)",
-        (symbol_id, blob),
-    )
     if auto_commit:
         db.commit()
 
