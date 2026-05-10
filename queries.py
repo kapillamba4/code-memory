@@ -815,3 +815,350 @@ def _truncate_code(source_text: str, max_lines: int = 15, max_chars: int = 500) 
     if len(truncated) > max_chars:
         truncated = truncated[:max_chars]
     return truncated + "\n// ... (truncated)"
+
+
+# ---------------------------------------------------------------------------
+# Dead-code detection
+# ---------------------------------------------------------------------------
+
+# Symbol kinds eligible for dead-code analysis.
+_DEAD_CODE_DEFAULT_KINDS: tuple[str, ...] = ("function", "method", "class")
+_DEAD_CODE_ALLOWED_KINDS: frozenset[str] = frozenset(_DEAD_CODE_DEFAULT_KINDS)
+
+# Names that are almost always entry points or framework callbacks; never flag.
+_DEAD_CODE_ENTRYPOINT_NAMES: frozenset[str] = frozenset({"main"})
+
+# Languages where the AST reference extractor does NOT capture method calls
+# made via member access (e.g. ``obj.method()``).  Methods defined in files
+# with these extensions get a confidence penalty and an explicit caveat.
+_MEMBER_ACCESS_BLIND_EXTENSIONS: frozenset[str] = frozenset({
+    ".js", ".jsx", ".ts", ".tsx",
+    ".go", ".rs",
+    ".kt", ".kts",
+    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx",
+})
+
+# Filenames that typically re-export public API (or list it via a string).
+_REEXPORT_FILENAMES: frozenset[str] = frozenset({
+    "__init__.py", "index.js", "index.jsx", "index.ts", "index.tsx",
+    "mod.rs", "lib.rs",
+})
+
+
+def _is_test_path(path: str) -> bool:
+    """Return True if *path* looks like a test or fixture file."""
+    import os
+
+    norm = path.replace("\\", "/").lower()
+    basename = os.path.basename(norm)
+
+    if basename == "conftest.py":
+        return True
+    if basename.startswith("test_"):
+        return True
+    if basename.endswith((
+        "_test.py",
+        ".test.js", ".test.jsx", ".test.ts", ".test.tsx",
+        ".spec.js", ".spec.jsx", ".spec.ts", ".spec.tsx",
+    )):
+        return True
+
+    parts = norm.split("/")
+    return any(seg in {"tests", "test", "__tests__", "spec", "specs"} for seg in parts)
+
+
+def _is_excluded_from_dead_code(
+    name: str, kind: str, path: str, include_tests: bool
+) -> tuple[bool, str | None]:
+    """Return ``(excluded, reason)``.
+
+    Symbols matching exclusion rules are never reported as dead code, regardless
+    of reference count.  Used to filter framework hooks, entry points, and
+    test fixtures that are invoked by mechanisms our reference extractor
+    can't observe.
+    """
+    if not name or name.startswith("<anonymous@"):
+        return True, "anonymous symbol"
+
+    # Python dunder protocol methods: __init__, __call__, __str__, __enter__, ...
+    if len(name) > 4 and name.startswith("__") and name.endswith("__"):
+        return True, "dunder method (Python protocol)"
+
+    if name in _DEAD_CODE_ENTRYPOINT_NAMES:
+        return True, "common entry-point name"
+
+    if kind == "file":
+        return True, "file-level fallback symbol"
+
+    if not include_tests and _is_test_path(path):
+        return True, "in a test file (use include_tests=True to scan)"
+
+    return False, None
+
+
+def _has_decorator_above(path: str, line_start: int) -> bool:
+    """Best-effort check for a decorator on the line(s) immediately above.
+
+    Returns True if a non-blank line above ``line_start`` begins with ``@``.
+    Falls back to False on read errors.  This heuristic catches Python and
+    TypeScript decorators that aren't part of the symbol's source_text in
+    the index.
+    """
+    try:
+        with open(path) as f:
+            lines = f.readlines()
+    except OSError:
+        return False
+
+    # Walk upward past blank lines until we find content (or run out).
+    idx = line_start - 2  # convert to zero-indexed line above line_start
+    while idx >= 0:
+        stripped = lines[idx].strip()
+        if not stripped:
+            idx -= 1
+            continue
+        return stripped.startswith("@")
+    return False
+
+
+def _score_dead_code_candidate(
+    name: str,
+    kind: str,
+    path: str,
+    name_share_count: int,
+    has_decorator: bool,
+) -> tuple[float, list[str]]:
+    """Return ``(confidence, reasons)`` for a candidate that has no external refs.
+
+    Confidence is in [0.0, 0.99] — never claims absolute certainty since
+    dynamic dispatch, reflection, and string-based imports can always hide
+    usages.  ``reasons`` is an ordered list of human-readable explanations.
+    """
+    import os
+
+    reasons: list[str] = ["No references found outside this symbol's own definition"]
+    confidence = 0.6
+
+    ext = os.path.splitext(path)[1].lower()
+    basename = os.path.basename(path)
+
+    # ── Privacy ────────────────────────────────────────────────────────────
+    if name.startswith("__") and not name.endswith("__"):
+        confidence += 0.25
+        reasons.append(f"Name '{name}' is name-mangled (Python private)")
+    elif name.startswith("_"):
+        confidence += 0.2
+        reasons.append(f"Underscore-prefixed name '{name}' suggests an internal helper")
+    else:
+        confidence -= 0.05
+        reasons.append(f"Public name '{name}' may be part of an exported API; verify before removing")
+
+    # ── Name uniqueness ────────────────────────────────────────────────────
+    if name_share_count > 1:
+        confidence -= 0.3
+        reasons.append(
+            f"Name '{name}' is shared by {name_share_count} symbols; "
+            "reference counts can't disambiguate which one is being used"
+        )
+
+    # ── Language / kind specific caveats ───────────────────────────────────
+    if kind == "method":
+        if ext in _MEMBER_ACCESS_BLIND_EXTENSIONS:
+            confidence -= 0.3
+            reasons.append(
+                f"Method in a {ext} file: calls via member access (obj.{name}()) "
+                "aren't captured by the reference index — verify manually"
+            )
+        else:
+            reasons.append(
+                f"Method in a {ext or 'unknown-ext'} file: dynamic dispatch may hide some callers"
+            )
+    elif kind == "class":
+        confidence -= 0.05
+        reasons.append("Class: dynamic instantiation (reflection, string lookup) may hide usages")
+
+    # ── Re-export files ────────────────────────────────────────────────────
+    if basename in _REEXPORT_FILENAMES:
+        confidence -= 0.4
+        reasons.append(f"Defined in {basename} — likely a re-export of a public API")
+
+    # ── Decorators ─────────────────────────────────────────────────────────
+    if has_decorator:
+        confidence -= 0.25
+        reasons.append("Decorated symbol — may be registered with a framework or DI system")
+
+    confidence = max(0.0, min(0.99, confidence))
+    return round(confidence, 3), reasons
+
+
+def _source_excerpt(source_text: str | None, max_chars: int = 120) -> str | None:
+    """Return the first non-empty trimmed line of *source_text*, truncated."""
+    if not source_text:
+        return None
+    for line in source_text.splitlines():
+        trimmed = line.strip()
+        if trimmed:
+            if len(trimmed) > max_chars:
+                trimmed = trimmed[: max_chars - 3] + "..."
+            return trimmed
+    return None
+
+
+def find_dead_code(
+    db,
+    *,
+    min_confidence: float = 0.5,
+    kinds: list[str] | None = None,
+    include_tests: bool = False,
+    top_k: int = 50,
+) -> dict:
+    """Find symbols that look like dead code.
+
+    Cross-references the ``symbols`` table against the ``references_`` table
+    to identify symbols with no reference outside their own body.  Each
+    candidate is scored with a confidence in [0.0, 0.99] and a list of
+    human-readable reasons.
+
+    Args:
+        db: Open ``sqlite3.Connection`` from ``db.get_db()``.
+        min_confidence: Lower bound on confidence (filters out low-signal hits).
+        kinds: Symbol kinds to consider; defaults to function/method/class.
+        include_tests: If True, also scan test files (default False).
+        top_k: Maximum candidates to return, sorted by confidence desc.
+
+    Returns:
+        Dict with:
+          - candidates: list of result dicts with name, kind, file_path,
+            line_start, line_end, confidence, reasons, source_excerpt.
+          - scanned_symbols: count of symbols inspected after exclusions.
+          - total_symbols: total symbols of the requested kinds in the index.
+          - limitations: list of caveats explaining where false positives may
+            arise (e.g., languages where member access isn't tracked).
+
+    This function is a heuristic — it cannot detect symbols invoked via
+    reflection, dynamic dispatch, string-based imports, or framework
+    registration.  Treat results as candidates to investigate, not as a
+    definitive deletion list.
+    """
+    import os
+
+    requested_kinds = list(kinds) if kinds is not None else list(_DEAD_CODE_DEFAULT_KINDS)
+    if not requested_kinds:
+        return {
+            "candidates": [],
+            "scanned_symbols": 0,
+            "total_symbols": 0,
+            "limitations": [],
+        }
+
+    placeholders = ",".join("?" * len(requested_kinds))
+    rows = db.execute(
+        f"""
+        SELECT s.id, s.name, s.kind, s.file_id, f.path,
+               s.line_start, s.line_end, s.source_text
+        FROM symbols s
+        JOIN files f ON f.id = s.file_id
+        WHERE s.kind IN ({placeholders})
+        """,
+        requested_kinds,
+    ).fetchall()
+
+    total_symbols = len(rows)
+    if not rows:
+        return {
+            "candidates": [],
+            "scanned_symbols": 0,
+            "total_symbols": 0,
+            "limitations": [],
+        }
+
+    # Count how many symbols share each name (across kinds in the index).
+    name_share: dict[str, int] = {}
+    for r in db.execute("SELECT name, COUNT(*) FROM symbols GROUP BY name").fetchall():
+        name_share[r[0]] = r[1]
+
+    # Prefetch all references and group by name; this avoids an N+1 query
+    # pattern across thousands of candidate symbols.  Memory footprint is
+    # ~24 bytes per ref, well within reasonable limits even for large repos.
+    refs_by_name: dict[str, list[tuple[int, int]]] = {}
+    for r_name, f_id, ln in db.execute(
+        "SELECT symbol_name, file_id, line_number FROM references_"
+    ).fetchall():
+        refs_by_name.setdefault(r_name, []).append((f_id, ln))
+
+    candidates: list[dict] = []
+    scanned = 0
+    seen_extensions: set[str] = set()
+
+    for sid, name, kind, file_id, path, line_start, line_end, source_text in rows:
+        excluded, _exclusion_reason = _is_excluded_from_dead_code(
+            name, kind, path, include_tests
+        )
+        if excluded:
+            continue
+
+        scanned += 1
+        seen_extensions.add(os.path.splitext(path)[1].lower())
+
+        # An "external" reference is any reference to this name that lives
+        # outside the symbol's own [line_start, line_end] body.  References
+        # at the definition line and recursive self-calls are internal.
+        has_external = False
+        for ref_file_id, ref_line in refs_by_name.get(name, ()):
+            if not (ref_file_id == file_id and line_start <= ref_line <= line_end):
+                has_external = True
+                break
+
+        if has_external:
+            continue
+
+        confidence, reasons = _score_dead_code_candidate(
+            name=name,
+            kind=kind,
+            path=path,
+            name_share_count=name_share.get(name, 1),
+            has_decorator=_has_decorator_above(path, line_start),
+        )
+
+        if confidence < min_confidence:
+            continue
+
+        candidates.append({
+            "name": name,
+            "kind": kind,
+            "file_path": path,
+            "line_start": line_start,
+            "line_end": line_end,
+            "confidence": confidence,
+            "reasons": reasons,
+            "source_excerpt": _source_excerpt(source_text),
+        })
+
+    # Highest confidence first; break ties by file/line for stable output.
+    candidates.sort(key=lambda c: (-c["confidence"], c["file_path"], c["line_start"]))
+
+    limitations: list[str] = []
+    blind = sorted(seen_extensions & _MEMBER_ACCESS_BLIND_EXTENSIONS)
+    if blind:
+        limitations.append(
+            "Member-access calls (obj.method()) aren't tracked for: "
+            + ", ".join(blind)
+            + ". Methods in these files have lower confidence."
+        )
+    shared = sum(1 for c in name_share.values() if c > 1)
+    if shared:
+        limitations.append(
+            f"{shared} symbol name(s) are reused across multiple definitions; "
+            "the reference index can't tell which definition a call resolves to."
+        )
+    limitations.append(
+        "Dynamic dispatch, reflection, string-based imports, and "
+        "framework-registered callbacks may produce false positives."
+    )
+
+    return {
+        "candidates": candidates[:top_k],
+        "scanned_symbols": scanned,
+        "total_symbols": total_symbols,
+        "limitations": limitations,
+    }

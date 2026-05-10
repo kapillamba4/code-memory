@@ -772,6 +772,158 @@ def search_history(
             return errors.format_error(e)
 
 
+# ── Tool 5: find_dead_code ────────────────────────────────────────────────
+_DEAD_CODE_ALLOWED_KINDS = ("function", "method", "class")
+
+
+@mcp.tool()
+def find_dead_code(
+    directory: str,
+    min_confidence: float = 0.5,
+    kinds: list[str] | None = None,
+    include_tests: bool = False,
+    top_k: int = 50,
+) -> api_types.FindDeadCodeResponse | api_types.ErrorResponse:
+    """USE THIS TOOL to find functions, methods, and classes that look like dead code (defined but never called).
+
+    PREREQUISITE: This tool requires indexing. If results are empty or you haven't indexed this session, call index_codebase(directory) first.
+
+    HOW IT WORKS:
+    Cross-references the indexed symbol table against the indexed reference table.
+    Any symbol with no reference outside its own definition body is flagged as a
+    candidate. Each candidate is scored with a confidence in [0.0, 0.99] and a
+    list of human-readable reasons explaining the verdict.
+
+    TRIGGER - Call this tool when the user asks:
+    - "Find dead code / unused functions / unused classes"
+    - "What's not used in this codebase?"
+    - "Are there functions I can safely delete?"
+    - "Show me dead code in <directory>"
+    - "Find unreachable / orphaned code"
+
+    HEURISTICS APPLIED:
+    - Excludes Python dunder methods (__init__, __call__, etc) — protocol methods
+    - Excludes 'main' — common entry point
+    - Excludes test files by default (override via include_tests=True)
+    - Excludes anonymous and file-level fallback symbols
+    - Lower confidence for methods in JS/TS/Go/Rust/C++/Kotlin (member-access
+      calls aren't captured by the reference index)
+    - Lower confidence for symbols defined in __init__.py / index.{js,ts} /
+      mod.rs (likely re-exports)
+    - Lower confidence for decorated symbols (likely framework-registered)
+    - Lower confidence when the name is shared across multiple symbols
+
+    LIMITATIONS:
+    Cannot detect symbols invoked via reflection, dynamic dispatch, string-based
+    imports, or framework registration. Treat results as candidates to
+    investigate, NOT as a definitive deletion list. Always verify before
+    removing code.
+
+    Do NOT use this tool for:
+    - Finding code definitions (use search_code with "definition")
+    - Finding where code is used (use search_code with "references")
+    - General code search (use search_code with "topic_discovery")
+
+    Args:
+        directory: Path to the project directory to scan.
+        min_confidence: Minimum confidence (0.0-1.0) to include a candidate.
+                        Default 0.5. Raise to filter aggressively.
+        kinds: Symbol kinds to scan. Default ['function', 'method', 'class'].
+               Allowed values: 'function', 'method', 'class'.
+        include_tests: If True, also scan symbols in test files. Default False.
+        top_k: Maximum candidates to return, sorted by confidence desc
+               (default 50, max 500).
+
+    Returns:
+        Dict with:
+        - candidates: list, each containing name, kind, file_path, line_start,
+          line_end, confidence, reasons, source_excerpt.
+        - count: number of candidates returned.
+        - scanned_symbols: count of symbols inspected after exclusions.
+        - total_symbols: total symbols of the requested kinds in the index.
+        - limitations: list of caveats for interpreting the results.
+    """
+    with logging_config.ToolLogger(
+        "find_dead_code",
+        directory=directory,
+        min_confidence=min_confidence,
+        kinds=kinds,
+        include_tests=include_tests,
+        top_k=top_k,
+    ) as log:
+        try:
+            directory_path = val.validate_directory(directory)
+            top_k_validated = val.validate_top_k(top_k, max_val=500, default=50)
+
+            if not isinstance(min_confidence, (int, float)):
+                raise errors.ValidationError(
+                    "min_confidence must be a number between 0.0 and 1.0",
+                    {"provided_type": type(min_confidence).__name__},
+                )
+            if not (0.0 <= min_confidence <= 1.0):
+                raise errors.ValidationError(
+                    "min_confidence must be between 0.0 and 1.0",
+                    {"provided": min_confidence},
+                )
+
+            kinds_validated: list[str] | None = None
+            if kinds is not None:
+                if not isinstance(kinds, list) or not all(isinstance(k, str) for k in kinds):
+                    raise errors.ValidationError(
+                        "kinds must be a list of strings",
+                        {"allowed_values": list(_DEAD_CODE_ALLOWED_KINDS)},
+                    )
+                if not kinds:
+                    raise errors.ValidationError(
+                        "kinds cannot be empty; omit the argument to use defaults",
+                        {"allowed_values": list(_DEAD_CODE_ALLOWED_KINDS)},
+                    )
+                invalid = [k for k in kinds if k not in _DEAD_CODE_ALLOWED_KINDS]
+                if invalid:
+                    raise errors.ValidationError(
+                        f"Invalid kind(s): {invalid}",
+                        {"allowed_values": list(_DEAD_CODE_ALLOWED_KINDS)},
+                    )
+                kinds_validated = list(dict.fromkeys(kinds))  # dedupe, preserve order
+
+            database = db_mod.get_db(str(directory_path))
+
+            result = queries.find_dead_code(
+                database,
+                min_confidence=float(min_confidence),
+                kinds=kinds_validated,
+                include_tests=bool(include_tests),
+                top_k=top_k_validated,
+            )
+            log.set_result_count(len(result["candidates"]))
+
+            response = cast(api_types.FindDeadCodeResponse, {
+                "status": "ok",
+                "directory": str(directory_path),
+                "candidates": result["candidates"],
+                "count": len(result["candidates"]),
+                "scanned_symbols": result["scanned_symbols"],
+                "total_symbols": result["total_symbols"],
+                "limitations": result["limitations"],
+            })
+
+            if result["total_symbols"] == 0:
+                symbols_count = database.execute(
+                    "SELECT COUNT(*) FROM symbols"
+                ).fetchone()[0]
+                if symbols_count == 0:
+                    response["hint"] = (  # type: ignore[typeddict-unknown-key]
+                        "Codebase may not be indexed. Call index_codebase(directory) first."
+                    )
+
+            return response
+
+        except errors.CodeMemoryError as e:
+            return e.to_dict()
+        except Exception as e:
+            return errors.format_error(e)
+
+
 # ── Entrypoint ────────────────────────────────────────────────────────────
 def build_arg_parser() -> argparse.ArgumentParser:
     """Build and return the CLI argument parser for code-memory."""
