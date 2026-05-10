@@ -470,6 +470,37 @@ SearchHistoryResponse = (
 
 
 # ---------------------------------------------------------------------------
+# find_dead_code Tool
+# ---------------------------------------------------------------------------
+
+
+class DeadCodeCandidate(TypedDict):
+    """A single dead-code candidate returned by find_dead_code."""
+
+    name: str
+    kind: str
+    file_path: str
+    line_start: int
+    line_end: int
+    confidence: float
+    reasons: list[str]
+    source_excerpt: str | None
+
+
+class FindDeadCodeResponse(TypedDict):
+    """Response from the find_dead_code tool."""
+
+    status: Literal["ok"]
+    directory: str
+    candidates: list[DeadCodeCandidate]
+    count: int
+    scanned_symbols: int
+    total_symbols: int
+    limitations: list[str]
+    hint: NotRequired[str]
+
+
+# ---------------------------------------------------------------------------
 # Tool Response Union Types
 # ---------------------------------------------------------------------------
 
@@ -481,5 +512,6 @@ ToolResponse = (
     | IndexCodebaseResponse
     | SearchDocsResponse
     | SearchHistoryResponse
+    | FindDeadCodeResponse
     | ErrorResponse
 )
