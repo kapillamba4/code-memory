@@ -12,6 +12,7 @@ architecture:
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 from typing import Literal, cast
 
@@ -772,10 +773,42 @@ def search_history(
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────────
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Build and return the CLI argument parser for code-memory."""
+    parser = argparse.ArgumentParser(
+        prog="code-memory",
+        description="code-memory MCP server",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default="stdio",
+        help="Transport protocol to use (default: stdio). Use 'sse' to run a shared HTTP server.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="Port for SSE transport (default: 8765). Only used when --transport=sse.",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host for SSE transport (default: 127.0.0.1). Only used when --transport=sse.",
+    )
+    return parser
+
+
 def main():
     """Entry point for the MCP server when installed as a package."""
+    args = build_arg_parser().parse_args()
+
+    if args.transport == "sse":
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+
     # Warmup is now done lazily on first index_codebase call
-    mcp.run()
+    mcp.run(transport=args.transport)
 
 
 if __name__ == "__main__":

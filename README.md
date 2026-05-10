@@ -228,7 +228,78 @@ For Windows:
 }
 ```
 
+## Shared SSE Server (Reduce Memory Usage)
+
+By default, each MCP host project launches its own `code-memory` process, which loads the embedding model (~1–2 GB) once per project. To avoid this, you can run a **single shared instance** over SSE (Server-Sent Events) and point all your MCP hosts at it.
+
+### Start the shared server
+
+```bash
+# Using uvx (recommended)
+uvx code-memory --transport sse
+
+# Custom port and host
+uvx code-memory --transport sse --port 8765 --host 127.0.0.1
+
+# Using standalone binary
+./code-memory-linux-x86_64 --transport sse
+```
+
+The server listens on `http://127.0.0.1:8765/sse` by default.
+
+### Configure MCP hosts to use the shared server
+
+Instead of launching a new process, point your MCP host at the running SSE endpoint.
+
+#### Claude Desktop
+
+```json
+{
+  "mcpServers": {
+    "code-memory": {
+      "url": "http://127.0.0.1:8765/sse"
+    }
+  }
+}
+```
+
+#### VS Code (Copilot / Continue)
+
+```json
+{
+  "servers": {
+    "code-memory": {
+      "url": "http://127.0.0.1:8765/sse"
+    }
+  }
+}
+```
+
+#### Claude Code (CLI) — `.mcp.json`
+
+```json
+{
+  "mcpServers": {
+    "code-memory": {
+      "url": "http://127.0.0.1:8765/sse"
+    }
+  }
+}
+```
+
+> **Tip:** Configure `uvx code-memory --transport sse` to start via a single-instance service manager (e.g. systemd user service, launchd agent, or another one-time login/startup mechanism) so the shared server starts automatically.
+
+> **Security:** The SSE endpoint is unauthenticated. Keep the default `--host 127.0.0.1` so only local processes can connect; do not bind to `0.0.0.0` or a public interface unless you've put authentication in front of it.
+
 ## Configuration
+
+### CLI Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--transport` | Transport protocol: `stdio` or `sse` | `stdio` |
+| `--port` | Port for SSE transport (only when `--transport sse` is used) | `8765` |
+| `--host` | Host/bind address for SSE transport (only when `--transport sse` is used) | `127.0.0.1` |
 
 ### Environment Variables
 
