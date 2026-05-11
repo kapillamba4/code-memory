@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-memory"
-version = "1.0.31"
+version = "1.0.32"
 description = "A deterministic, high-precision code intelligence MCP server"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13"
 authors = [
-    {name = "Kapil Lambert", email = "kapillamba4@gmail.com"}
+    {name = "Kapil Lamba", email = "kapillamba4@gmail.com"}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -52,7 +52,7 @@ dev = [
 ]
 
 [project.scripts]
-code-memory = "server:main"
+code-memory = "code_memory.server:main"
 
 [project.urls]
 Homepage = "https://github.com/kapillamba4/code-memory"
@@ -61,7 +61,7 @@ Repository = "https://github.com/kapillamba4/code-memory.git"
 Issues = "https://github.com/kapillamba4/code-memory/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["."]
+packages = ["code_memory"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -83,8 +83,18 @@ warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
 
+# TODO: clean up pre-existing type issues in these modules and remove the override.
+[[tool.mypy.overrides]]
+module = [
+    "code_memory.db",
+    "code_memory.doc_parser",
+    "code_memory.git_search",
+    "code_memory.parser",
+]
+ignore_errors = true
+
 [tool.coverage.run]
-source = ["."]
+source = ["code_memory"]
 omit = ["tests/*", ".venv/*"]
 
 [tool.coverage.report]

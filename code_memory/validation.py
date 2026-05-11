@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from errors import ValidationError
+from .errors import ValidationError
 
 
 def validate_directory(path: str, must_exist: bool = True) -> Path:

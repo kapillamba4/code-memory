@@ -48,15 +48,17 @@ hidden_imports = [
     # Tree-sitter core
     'tree_sitter',
     # Local modules
-    'server',
-    'db',
-    'parser',
-    'doc_parser',
-    'queries',
-    'git_search',
-    'errors',
-    'validation',
-    'logging_config',
+    'code_memory',
+    'code_memory.server',
+    'code_memory.db',
+    'code_memory.parser',
+    'code_memory.doc_parser',
+    'code_memory.queries',
+    'code_memory.git_search',
+    'code_memory.errors',
+    'code_memory.validation',
+    'code_memory.logging_config',
+    'code_memory.api_types',
     # GitPython dependencies
     'git',
     'gitdb',
@@ -101,7 +103,7 @@ except ImportError:
     pass
 
 a = Analysis(
-    ['server.py'],
+    ['code_memory/server.py'],
     pathex=[str(PROJECT_ROOT)],
     binaries=[],
     datas=datas,

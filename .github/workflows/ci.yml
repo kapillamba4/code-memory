@@ -8,9 +8,11 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.13"]
 
     steps:
@@ -29,7 +31,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Run type checking
-        run: uv run mypy api_types.py errors.py server.py
+        run: uv run mypy code_memory
 
       - name: Run tests
         run: uv run pytest tests/ -v --tb=short

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-import validation as val
-from errors import ValidationError
+from code_memory import validation as val
+from code_memory.errors import ValidationError
 
 
 class TestValidateQuery:
@@ -140,7 +140,8 @@ class TestValidateDirectory:
     def test_existing_directory(self, temp_dir):
         """Test that existing directories pass."""
         result = val.validate_directory(str(temp_dir))
-        assert result == temp_dir
+        # validate_directory resolves symlinks; on macOS /tmp -> /private/tmp.
+        assert result == temp_dir.resolve()
 
     def test_nonexistent_fails(self):
         """Test that nonexistent directories raise ValidationError."""
@@ -164,7 +165,8 @@ class TestValidateFile:
         test_file = temp_dir / "test.txt"
         test_file.write_text("test")
         result = val.validate_file(str(test_file))
-        assert result == test_file
+        # validate_file resolves symlinks; on macOS /tmp -> /private/tmp.
+        assert result == test_file.resolve()
 
     def test_nonexistent_fails(self):
         """Test that nonexistent files raise ValidationError."""

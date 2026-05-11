@@ -6,12 +6,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import sys
 import tempfile
 from pathlib import Path
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 
@@ -43,7 +39,10 @@ def temp_db():
 @pytest.fixture
 def temp_dir():
     """Provide a temporary directory for file tests."""
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # ignore_cleanup_errors=True: on Windows, sqlite3 keeps the .db file
+    # locked until the Connection is GC'd, which can outlive the fixture
+    # and break TemporaryDirectory.cleanup().
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         yield Path(tmpdir)
 
 

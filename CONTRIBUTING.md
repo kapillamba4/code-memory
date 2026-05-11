@@ -24,10 +24,10 @@ uv sync --all-extras
 
 ```bash
 # Run the MCP server
-uv run mcp run server.py
+uv run mcp run code_memory/server.py
 
 # Run with MCP Inspector for debugging
-uv run mcp dev server.py
+uv run mcp dev code_memory/server.py
 ```
 
 ## Development Workflow
@@ -73,18 +73,20 @@ uv build
 
 ```
 code-memory/
-├── server.py          # MCP server entry point
-├── db.py              # SQLite database layer
-├── parser.py          # Tree-sitter code parser
-├── doc_parser.py      # Markdown documentation parser
-├── queries.py         # Hybrid retrieval query layer
-├── git_search.py      # Git history search module
-├── errors.py          # Custom exception hierarchy
-├── validation.py      # Input validation functions
-├── logging_config.py  # Structured logging configuration
-├── tests/             # Test suite
-├── prompts/           # Milestone prompt files
-└── pyproject.toml     # Project configuration
+├── code_memory/           # Package source
+│   ├── server.py          # MCP server entry point
+│   ├── db.py              # SQLite database layer
+│   ├── parser.py          # Tree-sitter code parser
+│   ├── doc_parser.py      # Markdown documentation parser
+│   ├── queries.py         # Hybrid retrieval query layer
+│   ├── git_search.py      # Git history search module
+│   ├── errors.py          # Custom exception hierarchy
+│   ├── validation.py      # Input validation functions
+│   ├── logging_config.py  # Structured logging configuration
+│   └── api_types.py       # MCP response TypedDicts
+├── tests/                 # Test suite
+├── prompts/               # Milestone prompt files
+└── pyproject.toml         # Project configuration
 ```
 
 ## Pull Request Process
@@ -109,7 +111,7 @@ code-memory/
 
 ### Adding a New Tool
 
-1. Add the tool function in `server.py` with the `@mcp.tool()` decorator
+1. Add the tool function in `code_memory/server.py` with the `@mcp.tool()` decorator
 2. Add input validation using functions from `validation.py`
 3. Wrap the implementation in error handling
 4. Add logging using `ToolLogger`

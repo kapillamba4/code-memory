@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import db as db_mod
-import queries
-from queries import (
+from code_memory import db as db_mod
+from code_memory import queries
+from code_memory.queries import (
     _has_decorator_above,
     _is_excluded_from_dead_code,
     _is_test_path,
@@ -569,40 +566,40 @@ class TestFindDeadCodeCrossFile:
 
 class TestFindDeadCodeServerValidation:
     def test_nonexistent_directory_returns_error(self):
-        import server
+        from code_memory import server
 
         result = server.find_dead_code("/nonexistent/path")
         assert result.get("error") is True
         assert "ValidationError" in result.get("error_type", "")
 
     def test_min_confidence_above_one_returns_error(self, temp_dir):
-        import server
+        from code_memory import server
 
         result = server.find_dead_code(str(temp_dir), min_confidence=1.5)
         assert result.get("error") is True
         assert "ValidationError" in result.get("error_type", "")
 
     def test_negative_min_confidence_returns_error(self, temp_dir):
-        import server
+        from code_memory import server
 
         result = server.find_dead_code(str(temp_dir), min_confidence=-0.1)
         assert result.get("error") is True
 
     def test_invalid_kind_returns_error(self, temp_dir):
-        import server
+        from code_memory import server
 
         result = server.find_dead_code(str(temp_dir), kinds=["function", "variable"])
         assert result.get("error") is True
         assert "ValidationError" in result.get("error_type", "")
 
     def test_empty_kinds_list_returns_error(self, temp_dir):
-        import server
+        from code_memory import server
 
         result = server.find_dead_code(str(temp_dir), kinds=[])
         assert result.get("error") is True
 
     def test_top_k_too_large_returns_error(self, temp_dir):
-        import server
+        from code_memory import server
 
         result = server.find_dead_code(str(temp_dir), top_k=10000)
         assert result.get("error") is True
@@ -647,7 +644,7 @@ def prepopulated_directory(temp_dir):
 
 class TestFindDeadCodeServerEndToEnd:
     def test_returns_candidates(self, prepopulated_directory):
-        import server
+        from code_memory import server
 
         directory, conn = prepopulated_directory
         src_path = str(directory / "src.py")
@@ -678,7 +675,7 @@ class TestFindDeadCodeServerEndToEnd:
         assert "directory" in result
 
     def test_empty_index_returns_hint(self, prepopulated_directory):
-        import server
+        from code_memory import server
 
         directory, _ = prepopulated_directory
         result = server.find_dead_code(str(directory))
