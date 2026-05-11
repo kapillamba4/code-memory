@@ -39,7 +39,10 @@ def temp_db():
 @pytest.fixture
 def temp_dir():
     """Provide a temporary directory for file tests."""
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # ignore_cleanup_errors=True: on Windows, sqlite3 keeps the .db file
+    # locked until the Connection is GC'd, which can outlive the fixture
+    # and break TemporaryDirectory.cleanup().
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         yield Path(tmpdir)
 
 
