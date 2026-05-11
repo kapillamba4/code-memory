@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from errors import (
+from code_memory.errors import (
     CodeMemoryError,
     DatabaseError,
     EmbeddingError,

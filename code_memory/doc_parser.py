@@ -13,8 +13,8 @@ import re
 
 from markdown_it import MarkdownIt
 
-import db as db_mod
-from parser import SKIP_DIRS, GitignoreMatcher
+from . import db as db_mod
+from .parser import SKIP_DIRS, GitignoreMatcher
 
 logger = logging.getLogger(__name__)
 

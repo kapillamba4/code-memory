@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-import validation as val
-from errors import ValidationError
+from code_memory import validation as val
+from code_memory.errors import ValidationError
 
 
 class TestValidateQuery:

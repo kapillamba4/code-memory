@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import logging
 
-import logging_config
+from code_memory import logging_config
 
 
 class TestSetupLogging:

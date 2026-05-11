@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import server as server_mod
-from server import build_arg_parser
+from code_memory import server as server_mod
+from code_memory.server import build_arg_parser
 
 
 class TestMainArgParsing:

@@ -14,22 +14,36 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from mcp.server.fastmcp import Context, FastMCP
 
-import api_types
-import db as db_mod
-import doc_parser as doc_parser_mod
-import errors
-import logging_config
-import parser as parser_mod
-import queries
-import validation as val
+from . import api_types, errors, logging_config, queries
+from . import db as db_mod
+from . import doc_parser as doc_parser_mod
+from . import parser as parser_mod
+from . import validation as val
 
 # ── Initialize logging ───────────────────────────────────────────────────
 logger = logging_config.setup_logging()
 tool_logger = logging_config.get_logger("tools")
+
+# ── Hint messages shown when a tool returns no results because nothing is indexed yet ──
+_HINT_CODE_NOT_INDEXED = (
+    "No results. Codebase may not be indexed. Call index_codebase(directory) first."
+)
+_HINT_DOCS_NOT_INDEXED = (
+    "No results. Documentation may not be indexed. Call index_codebase(directory) first."
+)
+
+
+def _hint_if_unindexed(
+    response: Any, db: Any, *, table: Literal["symbols", "doc_chunks"], hint: str
+) -> None:
+    """Attach `hint` to `response` if the given table has zero rows."""
+    if db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0:
+        response["hint"] = hint
+
 
 # ── Lazy warmup state ────────────────────────────────────────────────────
 _warmup_done = False
@@ -306,9 +320,7 @@ def search_code(
                     "results": results,
                 })
                 if not results:
-                    symbols_count = database.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
-                    if symbols_count == 0:
-                        topic_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
+                    _hint_if_unindexed(topic_response, database, table="symbols", hint=_HINT_CODE_NOT_INDEXED)
                 return topic_response
 
             elif validated_search_type == "definition":
@@ -321,9 +333,7 @@ def search_code(
                     "results": results,
                 })
                 if not results:
-                    symbols_count = database.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
-                    if symbols_count == 0:
-                        def_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
+                    _hint_if_unindexed(def_response, database, table="symbols", hint=_HINT_CODE_NOT_INDEXED)
                 return def_response
 
             elif validated_search_type == "references":
@@ -336,9 +346,7 @@ def search_code(
                     "results": results,
                 })
                 if not results:
-                    symbols_count = database.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
-                    if symbols_count == 0:
-                        ref_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
+                    _hint_if_unindexed(ref_response, database, table="symbols", hint=_HINT_CODE_NOT_INDEXED)
                 return ref_response
 
             elif validated_search_type == "file_structure":
@@ -351,9 +359,7 @@ def search_code(
                     "results": results,
                 })
                 if not results:
-                    symbols_count = database.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
-                    if symbols_count == 0:
-                        struct_response["hint"] = "No results. Codebase may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
+                    _hint_if_unindexed(struct_response, database, table="symbols", hint=_HINT_CODE_NOT_INDEXED)
                 return struct_response
 
             return errors.format_error(errors.ValidationError(f"Unknown search_type: {search_type}"))
@@ -627,9 +633,7 @@ def search_docs(query: str, directory: str, top_k: int = 10) -> api_types.Search
             })
 
             if not results:
-                doc_chunks_count = database.execute("SELECT COUNT(*) FROM doc_chunks").fetchone()[0]
-                if doc_chunks_count == 0:
-                    response["hint"] = "No results. Documentation may not be indexed. Call index_codebase(directory) first."  # type: ignore[typeddict-unknown-key]
+                _hint_if_unindexed(response, database, table="doc_chunks", hint=_HINT_DOCS_NOT_INDEXED)
 
             return response
 
@@ -707,7 +711,7 @@ def search_history(
         try:
             from git.exc import InvalidGitRepositoryError, NoSuchPathError
 
-            import git_search as gs
+            from . import git_search as gs
 
             # Validate inputs
             validated_search_type = val.validate_search_type(
@@ -908,13 +912,7 @@ def find_dead_code(
             })
 
             if result["total_symbols"] == 0:
-                symbols_count = database.execute(
-                    "SELECT COUNT(*) FROM symbols"
-                ).fetchone()[0]
-                if symbols_count == 0:
-                    response["hint"] = (  # type: ignore[typeddict-unknown-key]
-                        "Codebase may not be indexed. Call index_codebase(directory) first."
-                    )
+                _hint_if_unindexed(response, database, table="symbols", hint=_HINT_CODE_NOT_INDEXED)
 
             return response
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import api_types
+    from . import api_types
 
 
 class CodeMemoryError(Exception):

@@ -11,8 +11,8 @@ from __future__ import annotations
 import logging
 import struct
 
-import db as db_mod
-import validation as val
+from . import db as db_mod
+from . import validation as val
 
 logger = logging.getLogger(__name__)
 
