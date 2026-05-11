@@ -18,7 +18,7 @@ from typing import Any
 import pathspec
 from tree_sitter import Language, Node, Parser
 
-import db as db_mod
+from . import db as db_mod
 
 logger = logging.getLogger(__name__)
 

@@ -67,7 +67,7 @@ cd code-memory
 uv sync
 
 # Run the MCP server (stdio transport)
-uv run mcp run server.py
+uv run mcp run code_memory/server.py
 ```
 
 ### Pre-built Binaries (Standalone)
@@ -119,7 +119,7 @@ uvx code-memory
 
 ```bash
 # Run with the MCP Inspector for interactive debugging
-uv run mcp dev server.py
+uv run mcp dev code_memory/server.py
 
 # Run tests
 uv run pytest tests/ -v
@@ -382,18 +382,20 @@ search_history(query="server.py", search_type="blame", target_file="server.py", 
 
 ```
 code-memory/
-├── server.py          # MCP server entry point (FastMCP)
-├── db.py              # SQLite database layer with sqlite-vec
-├── parser.py          # Tree-sitter-based code parser
-├── doc_parser.py      # Markdown documentation parser
-├── queries.py         # Hybrid retrieval query layer
-├── git_search.py      # Git history search module
-├── errors.py          # Custom exception hierarchy
-├── validation.py      # Input validation functions
-├── logging_config.py  # Structured logging configuration
-├── tests/             # Test suite
-├── pyproject.toml     # Project metadata & dependencies
-└── prompts/           # Milestone prompt engineering files
+├── code_memory/           # Package source
+│   ├── server.py          # MCP server entry point (FastMCP)
+│   ├── db.py              # SQLite database layer with sqlite-vec
+│   ├── parser.py          # Tree-sitter-based code parser
+│   ├── doc_parser.py      # Markdown documentation parser
+│   ├── queries.py         # Hybrid retrieval query layer
+│   ├── git_search.py      # Git history search module
+│   ├── errors.py          # Custom exception hierarchy
+│   ├── validation.py      # Input validation functions
+│   ├── logging_config.py  # Structured logging configuration
+│   └── api_types.py       # MCP response TypedDicts
+├── tests/                 # Test suite
+├── pyproject.toml         # Project metadata & dependencies
+└── prompts/               # Milestone prompt engineering files
 ```
 
 ## Troubleshooting

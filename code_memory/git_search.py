@@ -22,7 +22,7 @@ from typing import Any
 import git
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 
-import errors
+from . import errors
 
 # ---------------------------------------------------------------------------
 # Helpers
