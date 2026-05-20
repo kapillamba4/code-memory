@@ -394,10 +394,19 @@ def index_directory(dirpath: str, db, progress_callback=None) -> list[dict]:
     files_processed = 0
     parsed_files: list[tuple[str, dict | None, Exception | None]] = []  # (filepath, parsed_data, error)
 
+    # Pre-fetch all known file mtimes in the main thread before launching workers.
+    # _parse_file_for_indexing previously called db.execute() inside the thread
+    # pool, which caused sqlite3.InterfaceError ("bad parameter or other API
+    # misuse") on concurrent access even with check_same_thread=False.
+    existing_mtimes: dict[str, float] = {
+        os.path.abspath(row[0]): row[1]
+        for row in db.execute("SELECT path, last_modified FROM files").fetchall()
+    }
+
     def _parse_file_task(fpath: str) -> tuple[str, dict | None, Exception | None]:
         """Parse a single file and return extracted data (without DB writes)."""
         try:
-            parsed = _parse_file_for_indexing(fpath, db)
+            parsed = _parse_file_for_indexing(fpath, db, existing_mtimes)
             return (fpath, parsed, None)
         except Exception as e:
             return (fpath, None, e)
@@ -454,7 +463,7 @@ def index_directory(dirpath: str, db, progress_callback=None) -> list[dict]:
 
     for fpath, parsed_data, error in parsed_files:
         if error:
-            logger.exception("Failed to index %s", fpath)
+            logger.error("Failed to index %s", fpath, exc_info=error)
             results.append({
                 "file": fpath,
                 "symbols_indexed": 0,
@@ -514,22 +523,34 @@ def index_directory(dirpath: str, db, progress_callback=None) -> list[dict]:
     return results
 
 
-def _parse_file_for_indexing(filepath: str, db) -> dict | None:
+def _parse_file_for_indexing(filepath: str, db, existing_mtimes: dict | None = None) -> dict | None:
     """Parse a file and extract symbols/references without DB writes.
 
     Returns parsed data structure or None if skipped.
+
+    Args:
+        existing_mtimes: Optional pre-fetched mapping of abs-path → last_modified
+            from the files table. When provided, the freshness check uses a dict
+            lookup instead of a db.execute() call, which is required when this
+            function runs inside a ThreadPoolExecutor worker — concurrent access
+            to a single sqlite3.Connection causes InterfaceError even with
+            check_same_thread=False.
     """
     filepath = os.path.abspath(filepath)
     ext = os.path.splitext(filepath)[1].lower()
 
-    # Check freshness
+    # Check freshness — use pre-fetched dict when available to avoid cross-thread DB access
     mtime = os.path.getmtime(filepath)
-    row = db.execute(
-        "SELECT id, last_modified FROM files WHERE path = ?", (filepath,)
-    ).fetchone()
-
-    if row and row[1] >= mtime:
-        return {"skipped": True, "file_id": row[0]}
+    if existing_mtimes is not None:
+        cached_mtime = existing_mtimes.get(filepath)
+        if cached_mtime is not None and cached_mtime >= mtime:
+            return {"skipped": True}
+    else:
+        row = db.execute(
+            "SELECT id, last_modified FROM files WHERE path = ?", (filepath,)
+        ).fetchone()
+        if row and row[1] >= mtime:
+            return {"skipped": True, "file_id": row[0]}
 
     # Read file
     source_bytes = Path(filepath).read_bytes()
@@ -601,8 +622,18 @@ def _store_parsed_file(
         # Delete stale data
         db_mod.delete_file_data(db, file_id, auto_commit=False)
 
-        # Store symbols — data was just deleted so every insert is fresh;
-        # use cursor.lastrowid instead of a separate SELECT.
+        # Store symbols. tree-sitter can produce duplicate (name, kind,
+        # line_start) tuples for a single file; use INSERT OR IGNORE so a
+        # duplicate does not abort the transaction.
+        #
+        # NOTE: cursor.lastrowid is NOT reset to 0 after a no-op INSERT OR
+        # IGNORE — it retains the rowid from the previous successful insert on
+        # this connection. Use cursor.rowcount == 1 to detect a real insert.
+        #
+        # NOTE: symbol_embeddings is a sqlite-vec virtual table and does not
+        # support conflict-resolution clauses (INSERT OR IGNORE raises
+        # OperationalError). Never attempt to insert an embedding for a symbol
+        # that was not freshly inserted.
         embedding_pairs: list[tuple[int, list[float]]] = []
 
         if parsed_data.get("symbols"):
@@ -610,7 +641,7 @@ def _store_parsed_file(
             for i, sym in enumerate(parsed_data["symbols"]):
                 parent_id = db_ids.get(sym["parent_idx"]) if sym["parent_idx"] is not None else None
                 cursor = db.execute(
-                    """INSERT INTO symbols
+                    """INSERT OR IGNORE INTO symbols
                            (name, kind, file_id, line_start, line_end,
                             parent_symbol_id, source_text)
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
@@ -618,10 +649,14 @@ def _store_parsed_file(
                      sym["line_start"], sym["line_end"],
                      parent_id, sym["source_text"]),
                 )
-                sym_id = cursor.lastrowid
+                is_new = cursor.rowcount == 1
+                sym_id = cursor.lastrowid if is_new else db.execute(
+                    "SELECT id FROM symbols WHERE file_id=? AND name=? AND kind=? AND line_start=?",
+                    (file_id, sym["name"], sym["kind"], sym["line_start"]),
+                ).fetchone()[0]
                 db_ids[i] = sym_id
 
-                if file_embeddings and i < len(file_embeddings):
+                if is_new and file_embeddings and i < len(file_embeddings):
                     embedding_pairs.append((sym_id, file_embeddings[i]))
                 symbols_indexed += 1
 

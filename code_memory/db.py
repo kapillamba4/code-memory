@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+from datetime import datetime
 import sys
 from contextlib import contextmanager
 from functools import lru_cache
@@ -907,8 +908,8 @@ def get_index_stats(db: sqlite3.Connection, project_dir: str) -> dict:
             "file_extensions": file_extensions,
         },
         "freshness": {
-            "last_file_indexed": last_file_indexed,
-            "last_doc_indexed": last_doc_indexed,
+            "last_code_indexed": datetime.fromtimestamp(last_file_indexed).isoformat() if last_file_indexed else None,
+            "last_doc_indexed": datetime.fromtimestamp(last_doc_indexed).isoformat() if last_doc_indexed else None,
         },
         "embedding": {
             "model": embedding_model[0] if embedding_model else None,
