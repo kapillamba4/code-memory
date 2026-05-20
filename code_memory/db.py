@@ -14,9 +14,9 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
-from datetime import datetime
 import sys
 from contextlib import contextmanager
+from datetime import datetime
 from functools import lru_cache
 from typing import TYPE_CHECKING
 

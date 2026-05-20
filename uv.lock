@@ -109,7 +109,7 @@ wheels = [
 
 [[package]]
 name = "code-memory"
-version = "1.0.32"
+version = "1.0.33"
 source = { editable = "." }
 dependencies = [
     { name = "einops" },
